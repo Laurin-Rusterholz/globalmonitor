@@ -645,6 +645,16 @@ body.project-mode .proj-toolbar{
 .connection-line{stroke-dasharray:5 5;animation:dash 30s linear infinite}
 @keyframes dash{to{stroke-dashoffset:-200}}
 
+/* Drag-Handle für verschiebbare Toolbars */
+.drag-handle{
+  display:inline-block;color:var(--ink-faint);font-size:14px;letter-spacing:-2px;
+  padding:2px 5px;margin-right:5px;cursor:move;opacity:0.6;line-height:1;
+  border-right:1px solid var(--line);font-family:var(--font-body);
+  user-select:none;align-self:center;flex:0 0 auto;
+}
+.drag-handle:hover{opacity:1;color:var(--accent)}
+[data-draggable="1"]{user-select:none}
+
 /* Drawing-Sub-Toolbar (Auswahl der Zeichen-Werkzeuge) */
 .draw-sub-toolbar{
   position:fixed; bottom:70px; right:14px;

@@ -5067,6 +5067,96 @@ window.loadAllResearch = async function() {
 };
 
 /* ════════════════════════════════════════════════════════════════
+   DRAGGABLE UI - alle Toolbars verschiebbar, Position persistent
+   ════════════════════════════════════════════════════════════════ */
+function makeDraggable(el, storageKey, options = {}) {
+  if (!el || el.dataset.draggable === '1') return;
+  el.dataset.draggable = '1';
+  el.style.cursor = 'move';
+
+  // Drag-Handle hinzufügen (kleines Icon top-left)
+  if (!el.querySelector('.drag-handle')) {
+    const h = document.createElement('span');
+    h.className = 'drag-handle';
+    h.textContent = '⋮⋮';
+    h.title = 'Ziehen zum Verschieben';
+    el.insertBefore(h, el.firstChild);
+  }
+
+  // Saved-Position anwenden
+  applySavedPosition(el, storageKey);
+
+  let dragging = false, sx = 0, sy = 0, startLeft = 0, startTop = 0;
+  const onDown = (e) => {
+    // Nicht draggen wenn auf interaktivem Element (Button, Input, etc.)
+    const target = e.target;
+    if (target !== el && !target.classList.contains('drag-handle')) {
+      const tag = target.tagName;
+      if (['BUTTON','INPUT','SELECT','TEXTAREA','A'].includes(tag)) return;
+      if (target.closest('button,input,select,textarea,a')) return;
+    }
+    dragging = true;
+    const rect = el.getBoundingClientRect();
+    sx = e.clientX; sy = e.clientY;
+    startLeft = rect.left; startTop = rect.top;
+    el.style.right = 'auto'; el.style.bottom = 'auto';
+    el.style.transform = 'none';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  };
+  const onMove = (e) => {
+    if (!dragging) return;
+    const nx = Math.max(0, Math.min(window.innerWidth - el.offsetWidth, startLeft + e.clientX - sx));
+    const ny = Math.max(0, Math.min(window.innerHeight - el.offsetHeight, startTop + e.clientY - sy));
+    el.style.left = nx + 'px';
+    el.style.top = ny + 'px';
+  };
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.userSelect = '';
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ left: el.style.left, top: el.style.top }));
+    } catch {}
+  };
+  el.addEventListener('mousedown', onDown);
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+function applySavedPosition(el, storageKey) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && saved.left && saved.top) {
+      el.style.left = saved.left;
+      el.style.top = saved.top;
+      el.style.right = 'auto'; el.style.bottom = 'auto';
+      el.style.transform = 'none';
+    }
+  } catch {}
+}
+
+// Reset-Funktion für Notfälle
+window.resetDraggablePositions = function() {
+  ['gm_drag_topbar', 'gm_drag_drawtoolbar', 'gm_drag_projtoolbar', 'gm_drag_projbanner', 'gm_drag_projstatus'].forEach(k => localStorage.removeItem(k));
+  toast('Toolbar-Positionen zurückgesetzt. Reload für volle Wirkung.');
+};
+
+// Anwenden auf existierende Elemente nach DOMContentLoaded
+function initDraggableUI() {
+  makeDraggable(document.getElementById('topbar'), 'gm_drag_topbar');
+  makeDraggable(document.getElementById('projModeIndicator'), 'gm_drag_projbanner');
+  // proj-toolbar (Zeichnen/Linien/Clear/Export) - nur im Projekt-Modus aktiv
+  const projToolbar = document.getElementById('projToolbar');
+  if (projToolbar) makeDraggable(projToolbar, 'gm_drag_projtoolbar');
+  // Recherche-Banner
+  const projBanner = document.getElementById('projStatusBanner');
+  if (projBanner) makeDraggable(projBanner, 'gm_drag_projstatus');
+}
+// Draw-Sub-Toolbar wird dynamisch erstellt - macheDraggable beim Erstellen
+setTimeout(initDraggableUI, 300);
+
+/* ════════════════════════════════════════════════════════════════
    EIGENES ZEICHEN-TOOL (kein Library-Abhängigkeit)
    ════════════════════════════════════════════════════════════════ */
 let drawnItems = L.featureGroup();
@@ -5096,6 +5186,7 @@ function showDrawToolbar() {
       b.onclick = () => setDrawMode(b.dataset.dm);
     });
     document.getElementById('drawDone').onclick = finishDrawing;
+    makeDraggable(bar, 'gm_drag_drawtoolbar');
   }
   bar.style.display = 'flex';
 }
