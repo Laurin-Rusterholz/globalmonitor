@@ -63,7 +63,7 @@ function syncUrl() {
    PANEL-MANAGER (Mutual Exclusion)
    ════════════════════════════════════════════════════════════════ */
 const SIDE_PANELS = ['ai', 'osint', 'briefing', 'comparePanel', 'pinPanel', 'researchPanel', 'projectPanel'];
-const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal', 'newProjectModal', 'projectNoteModal', 'orgBrowserModal', 'orgProfileModal'];
+const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal', 'newProjectModal', 'projectNoteModal', 'orgBrowserModal', 'orgProfileModal', 'materialModal', 'focusModal'];
 
 function openSidePanel(id) {
   SIDE_PANELS.forEach(p => {
@@ -4149,7 +4149,12 @@ document.querySelectorAll('.project-tab').forEach(tab => {
 function renderProjectTab(tab) {
   const body = document.getElementById('projectPanelBody');
   if (!activeProject) { body.innerHTML = '<div class="conn-empty">Kein Projekt geladen</div>'; return; }
+  // Datenstruktur sicherstellen
+  activeProject.materials = activeProject.materials || [];
+  activeProject.focusAreas = activeProject.focusAreas || [];
   if (tab === 'overview') renderProjOverview(body);
+  else if (tab === 'focus') renderProjFocusAreas(body);
+  else if (tab === 'materials') renderProjMaterials(body);
   else if (tab === 'countries') renderProjCountries(body);
   else if (tab === 'notes') renderProjNotes(body);
   else if (tab === 'chat') renderProjChat(body);
@@ -4157,7 +4162,18 @@ function renderProjectTab(tab) {
 
 function renderProjOverview(body) {
   const p = activeProject;
-  let html = `<div class="proj-thesis"><b style="color:var(--protest)">These:</b><br>${escapeHtml(p.thesis)}</div>`;
+  // Dashboard-Stats
+  const matCounts = {};
+  (p.materials||[]).forEach(m => { matCounts[m.type] = (matCounts[m.type]||0)+1; });
+  const totalNotes = Object.values(p.countryNotes||{}).reduce((s,a)=>s+a.length,0);
+  let html = `<div class="proj-dash-grid">
+    <div class="proj-dash-stat" onclick="document.querySelector('.project-tab[data-ptab=focus]').click()"><div class="proj-dash-num">${(p.focusAreas||[]).length}</div><div class="proj-dash-label">🎯 Schwerpunkte</div></div>
+    <div class="proj-dash-stat" onclick="document.querySelector('.project-tab[data-ptab=materials]').click()"><div class="proj-dash-num">${(p.materials||[]).length}</div><div class="proj-dash-label">📚 Materialien</div></div>
+    <div class="proj-dash-stat" onclick="document.querySelector('.project-tab[data-ptab=countries]').click()"><div class="proj-dash-num">${(p.relatedCountries||p.countries||[]).length}</div><div class="proj-dash-label">🌍 Länder</div></div>
+    <div class="proj-dash-stat" onclick="document.querySelector('.project-tab[data-ptab=notes]').click()"><div class="proj-dash-num">${totalNotes}</div><div class="proj-dash-label">📝 Notizen</div></div>
+    <div class="proj-dash-stat" onclick="document.querySelector('.project-tab[data-ptab=chat]').click()"><div class="proj-dash-num">${(p.chatHistory||[]).length}</div><div class="proj-dash-label">💬 Chat</div></div>
+  </div>`;
+  html += `<div class="proj-thesis"><b style="color:var(--protest)">These:</b><br>${escapeHtml(p.thesis)}</div>`;
 
   html += `<div class="proj-section">
     <h4>🤖 KI-Analyse <button id="rerunAnalysis">${p.relatedCountries?.length?'↻ Aktualisieren':'⚡ Starten'}</button></h4>`;
@@ -4183,6 +4199,232 @@ function renderProjOverview(body) {
   body.innerHTML = html;
   document.getElementById('rerunAnalysis')?.addEventListener('click', () => runProjectAnalysis(true));
 }
+
+/* ════════════════════════════════════════════════════════════════
+   SCHWERPUNKTE & MATERIALIEN (Newsroom-Hub-Stil)
+   ════════════════════════════════════════════════════════════════ */
+const MAT_TYPES = {
+  note:       {icon:'📝', label:'Notiz',     color:'#8e8e93'},
+  quote:      {icon:'💬', label:'Zitat',     color:'#5e5ce6'},
+  question:   {icon:'❓', label:'Frage',     color:'#ff9f0a'},
+  task:       {icon:'✓',  label:'Aufgabe',   color:'#0a84ff'},
+  link:       {icon:'🔗', label:'Link',      color:'#64d2ff'},
+  source:     {icon:'📚', label:'Quelle',    color:'#bf5af2'},
+  finding:    {icon:'💡', label:'Erkenntnis',color:'#30d158'},
+  hypothesis: {icon:'🧠', label:'Hypothese', color:'#ff375f'},
+};
+
+function renderProjFocusAreas(body) {
+  const p = activeProject;
+  let html = `<div class="proj-section">
+    <h4>🎯 Schwerpunkte (${p.focusAreas.length}) <button id="addFocusBtn">＋ Neuer Schwerpunkt</button></h4>`;
+  if (!p.focusAreas.length) {
+    html += `<div class="conn-empty">Noch keine Schwerpunkte. Schwerpunkte sind thematische Sub-Themen innerhalb des Projekts (z.B. 'Militärische Lage', 'Wirtschaftssanktionen', 'Diplomatie').</div>`;
+  } else {
+    p.focusAreas.forEach((f, idx) => {
+      const matCount = (p.materials||[]).filter(m => m.focusAreaId === f.id).length;
+      html += `<div class="focus-card" style="border-left-color:${f.color||'#8e8e93'}" data-id="${f.id}">
+        <div class="focus-card-head">
+          <div class="focus-card-name">${escapeHtml(f.name)}</div>
+          <div style="display:flex;gap:5px">
+            <button class="ptb-btn" style="padding:3px 8px;font-size:10px" data-act="filter" data-id="${f.id}">📚 ${matCount}</button>
+            <button class="ptb-btn" style="padding:3px 8px;font-size:10px" data-act="edit" data-i="${idx}">✏</button>
+            <button class="ptb-btn" style="padding:3px 8px;font-size:10px" data-act="del" data-i="${idx}">🗑</button>
+          </div>
+        </div>
+        ${f.description ? `<div class="focus-card-desc">${escapeHtml(f.description)}</div>` : ''}
+        <div class="focus-card-meta">${matCount} Material${matCount!==1?'ien':''}</div>
+      </div>`;
+    });
+  }
+  html += `</div>`;
+  body.innerHTML = html;
+  document.getElementById('addFocusBtn').onclick = () => openFocusModal();
+  body.querySelectorAll('[data-act]').forEach(b => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const act = b.dataset.act, idx = +b.dataset.i;
+      if (act === 'edit') openFocusModal(p.focusAreas[idx], idx);
+      else if (act === 'del') {
+        if (!confirm('Schwerpunkt löschen? Materialien bleiben aber Schwerpunkt-Zuordnung verloren.')) return;
+        const removedId = p.focusAreas[idx].id;
+        p.focusAreas.splice(idx, 1);
+        (p.materials||[]).forEach(m => { if (m.focusAreaId === removedId) delete m.focusAreaId; });
+        saveProject().then(() => renderProjectTab('focus'));
+      } else if (act === 'filter') {
+        window._matFilterFocus = b.dataset.id;
+        document.querySelector('.project-tab[data-ptab="materials"]').click();
+      }
+    };
+  });
+}
+
+function openFocusModal(focus = null, idx = null) {
+  document.getElementById('focusModalTitle').textContent = focus ? 'Schwerpunkt bearbeiten' : 'Neuer Schwerpunkt';
+  document.getElementById('focusName').value = focus?.name || '';
+  document.getElementById('focusDesc').value = focus?.description || '';
+  document.getElementById('focusColor').value = focus?.color || '#0a84ff';
+  document.getElementById('focusModal').dataset.editIdx = idx ?? '';
+  openModal('focusModal');
+  setTimeout(() => document.getElementById('focusName').focus(), 80);
+}
+document.getElementById('focusSave')?.addEventListener('click', async () => {
+  if (!activeProject) return;
+  const idx = document.getElementById('focusModal').dataset.editIdx;
+  const name = document.getElementById('focusName').value.trim();
+  if (!name) return toast('Name nötig');
+  const data = {
+    name,
+    description: document.getElementById('focusDesc').value.trim(),
+    color: document.getElementById('focusColor').value,
+  };
+  activeProject.focusAreas = activeProject.focusAreas || [];
+  if (idx !== '') {
+    const i = +idx;
+    Object.assign(activeProject.focusAreas[i], data);
+  } else {
+    data.id = `f_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+    activeProject.focusAreas.push(data);
+  }
+  await saveProject();
+  document.getElementById('focusModal').classList.remove('open');
+  renderProjectTab('focus');
+});
+
+function renderProjMaterials(body) {
+  const p = activeProject;
+  const filterType = window._matFilterType || '';
+  const filterFocus = window._matFilterFocus || '';
+  const filterCountry = window._matFilterCountry || '';
+
+  let html = `<div class="proj-section">
+    <h4>📚 Materialien (${p.materials.length}) <button id="addMaterialBtn">＋ Neues Material</button></h4>
+    <div class="mat-filter-bar">
+      <span class="mat-filter${!filterType?' active':''}" data-ft="">Alle</span>`;
+  Object.entries(MAT_TYPES).forEach(([t, info]) => {
+    const cnt = p.materials.filter(m => m.type === t).length;
+    if (cnt) html += `<span class="mat-filter${filterType===t?' active':''}" data-ft="${t}">${info.icon} ${info.label} (${cnt})</span>`;
+  });
+  html += `</div>`;
+
+  if (p.focusAreas.length) {
+    html += `<div class="mat-filter-bar">
+      <span class="mat-filter${!filterFocus?' active':''}" data-ff="">Alle Schwerpunkte</span>`;
+    p.focusAreas.forEach(f => {
+      const cnt = p.materials.filter(m => m.focusAreaId === f.id).length;
+      html += `<span class="mat-filter${filterFocus===f.id?' active':''}" data-ff="${f.id}" style="border-left:3px solid ${f.color}">${escapeHtml(f.name)} (${cnt})</span>`;
+    });
+    html += `</div>`;
+  }
+
+  const items = p.materials.filter(m => {
+    if (filterType && m.type !== filterType) return false;
+    if (filterFocus && m.focusAreaId !== filterFocus) return false;
+    if (filterCountry && m.countryIso !== filterCountry) return false;
+    return true;
+  }).sort((a,b) => new Date(b.created) - new Date(a.created));
+
+  if (!items.length) {
+    html += `<div class="conn-empty">Noch keine Materialien${filterType||filterFocus?' (mit Filter)':''}. Klicke ＋ Neues Material.</div>`;
+  } else {
+    items.forEach(m => {
+      const info = MAT_TYPES[m.type] || MAT_TYPES.note;
+      const focusArea = p.focusAreas.find(f => f.id === m.focusAreaId);
+      const cName = m.countryIso ? (window.getCountryProfile?.(m.countryIso)?.name || m.countryIso) : '';
+      const md = markdownish(m.content || '');
+      html += `<div class="mat-card" data-type="${m.type}" data-id="${m.id}">
+        <div class="mat-head">
+          <span class="mat-type-icon" title="${info.label}">${info.icon}</span>
+          <div class="mat-title">${escapeHtml(m.title || info.label)}</div>
+          <div class="mat-actions">
+            <button data-act="edit" data-id="${m.id}">✏</button>
+            <button data-act="del" data-id="${m.id}">🗑</button>
+          </div>
+        </div>
+        ${m.content ? `<div class="mat-content">${md}</div>` : ''}
+        <div class="mat-meta">
+          ${focusArea ? `<span class="mat-focus-pill" style="background:${focusArea.color}">${escapeHtml(focusArea.name)}</span>` : ''}
+          ${cName ? `<span>${flagEmoji(m.countryIso)} ${escapeHtml(cName)}</span>` : ''}
+          ${m.source ? (m.source.startsWith('http') ? `<a href="${m.source}" target="_blank" rel="noopener">🔗 ${escapeHtml(new URL(m.source).hostname)}</a>` : `<span>📎 ${escapeHtml(m.source)}</span>`) : ''}
+          ${m.tags?.length ? `<span>${m.tags.map(t=>'#'+escapeHtml(t)).join(' ')}</span>` : ''}
+          <span style="margin-left:auto">${new Date(m.created).toLocaleString('de-CH',{dateStyle:'short',timeStyle:'short'})}</span>
+        </div>
+      </div>`;
+    });
+  }
+  html += `</div>`;
+  body.innerHTML = html;
+
+  document.getElementById('addMaterialBtn').onclick = () => openMaterialModal();
+  body.querySelectorAll('.mat-filter[data-ft]').forEach(f => {
+    f.onclick = () => { window._matFilterType = f.dataset.ft; renderProjectTab('materials'); };
+  });
+  body.querySelectorAll('.mat-filter[data-ff]').forEach(f => {
+    f.onclick = () => { window._matFilterFocus = f.dataset.ff; renderProjectTab('materials'); };
+  });
+  body.querySelectorAll('button[data-act]').forEach(b => {
+    b.onclick = async () => {
+      const m = p.materials.find(x => x.id === b.dataset.id);
+      if (!m) return;
+      if (b.dataset.act === 'edit') openMaterialModal(m);
+      else if (b.dataset.act === 'del') {
+        if (!confirm('Material löschen?')) return;
+        p.materials = p.materials.filter(x => x.id !== m.id);
+        await saveProject();
+        renderProjectTab('materials');
+      }
+    };
+  });
+}
+
+function openMaterialModal(material = null) {
+  document.getElementById('materialModalTitle').textContent = material ? 'Material bearbeiten' : 'Neues Material';
+  document.getElementById('matType').value = material?.type || 'note';
+  document.getElementById('matTitle').value = material?.title || '';
+  document.getElementById('matContent').value = material?.content || '';
+  document.getElementById('matSource').value = material?.source || '';
+  document.getElementById('matCountry').value = material?.countryIso || '';
+  document.getElementById('matTags').value = (material?.tags || []).join(', ');
+  // Focus-Areas befüllen
+  const focusSelect = document.getElementById('matFocus');
+  focusSelect.innerHTML = '<option value="">— Allgemein —</option>' +
+    (activeProject?.focusAreas || []).map(f =>
+      `<option value="${f.id}"${material?.focusAreaId===f.id?' selected':''}>${escapeHtml(f.name)}</option>`
+    ).join('');
+  document.getElementById('materialModal').dataset.editId = material?.id || '';
+  openModal('materialModal');
+  setTimeout(() => document.getElementById('matTitle').focus(), 80);
+}
+
+document.getElementById('matSave')?.addEventListener('click', async () => {
+  if (!activeProject) return;
+  const editId = document.getElementById('materialModal').dataset.editId;
+  const data = {
+    type: document.getElementById('matType').value,
+    title: document.getElementById('matTitle').value.trim(),
+    content: document.getElementById('matContent').value.trim(),
+    source: document.getElementById('matSource').value.trim(),
+    focusAreaId: document.getElementById('matFocus').value || undefined,
+    countryIso: document.getElementById('matCountry').value.trim().toUpperCase() || undefined,
+    tags: document.getElementById('matTags').value.split(',').map(t=>t.trim()).filter(Boolean),
+  };
+  if (!data.title && !data.content) return toast('Titel oder Inhalt nötig');
+  activeProject.materials = activeProject.materials || [];
+  if (editId) {
+    const m = activeProject.materials.find(x => x.id === editId);
+    if (m) { Object.assign(m, data); m.updated = new Date().toISOString(); }
+  } else {
+    activeProject.materials.unshift({
+      id: `mat_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      ...data,
+      created: new Date().toISOString(),
+    });
+  }
+  await saveProject();
+  document.getElementById('materialModal').classList.remove('open');
+  toast('Material gespeichert');
+  renderProjectTab('materials');
+});
 
 function renderProjCountries(body) {
   const p = activeProject;
@@ -4711,8 +4953,34 @@ function exportProjectMarkdown() {
     });
     md += '\n';
   }
+  if (p.focusAreas?.length) {
+    md += `## Schwerpunkte\n\n`;
+    p.focusAreas.forEach(f => {
+      md += `### ${f.name}\n\n${f.description||''}\n\n`;
+    });
+  }
+  if (p.materials?.length) {
+    md += `## Materialien (${p.materials.length})\n\n`;
+    const grouped = {};
+    p.materials.forEach(m => { (grouped[m.type] = grouped[m.type]||[]).push(m); });
+    Object.entries(grouped).forEach(([type, items]) => {
+      const info = MAT_TYPES[type] || {label: type, icon: '·'};
+      md += `### ${info.icon} ${info.label}n (${items.length})\n\n`;
+      items.forEach(m => {
+        md += `#### ${m.title || '(ohne Titel)'} *(${new Date(m.created).toLocaleString('de-CH')})*\n\n`;
+        if (m.countryIso) md += `**Land:** ${m.countryIso}  \n`;
+        if (m.focusAreaId) {
+          const f = p.focusAreas.find(x => x.id === m.focusAreaId);
+          if (f) md += `**Schwerpunkt:** ${f.name}  \n`;
+        }
+        if (m.source) md += `**Quelle:** ${m.source}  \n`;
+        if (m.tags?.length) md += `**Tags:** ${m.tags.map(t=>'#'+t).join(', ')}  \n`;
+        md += `\n${m.content||''}\n\n`;
+      });
+    });
+  }
   if (p.countryNotes) {
-    md += `## Notizen pro Land\n\n`;
+    md += `## Notizen pro Land (Karten-Notizen)\n\n`;
     Object.entries(p.countryNotes).forEach(([iso, notes]) => {
       if (!notes?.length) return;
       const cName = window.getCountryProfile?.(iso)?.name || iso;

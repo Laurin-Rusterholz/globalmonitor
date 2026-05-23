@@ -323,12 +323,79 @@
     </div>
   </div>
   <div class="project-tabs">
-    <button class="project-tab active" data-ptab="overview">📋 Übersicht</button>
+    <button class="project-tab active" data-ptab="overview">📋 Dashboard</button>
+    <button class="project-tab" data-ptab="focus">🎯 Schwerpunkte</button>
+    <button class="project-tab" data-ptab="materials">📚 Materialien</button>
     <button class="project-tab" data-ptab="countries">🌍 Länder</button>
     <button class="project-tab" data-ptab="notes">📝 Notizen</button>
     <button class="project-tab" data-ptab="chat">💬 Chat</button>
   </div>
   <div class="project-body" id="projectPanelBody"></div>
+</div>
+
+<!-- Material zum Projekt hinzufügen -->
+<div id="materialModal" class="modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2 id="materialModalTitle">Neues Material</h2>
+      <button class="closeBtn" data-close="materialModal">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="lbl-row" style="gap:8px">
+        <label style="flex:1">Typ
+          <select id="matType">
+            <option value="note">📝 Notiz</option>
+            <option value="quote">💬 Zitat</option>
+            <option value="question">❓ Frage</option>
+            <option value="task">✓ Aufgabe</option>
+            <option value="link">🔗 Link</option>
+            <option value="source">📚 Quelle</option>
+            <option value="finding">💡 Erkenntnis</option>
+            <option value="hypothesis">🧠 Hypothese</option>
+          </select>
+        </label>
+        <label style="flex:1">Schwerpunkt
+          <select id="matFocus"><option value="">— Allgemein —</option></select>
+        </label>
+      </div>
+      <label class="lbl-row">Land (ISO, optional)<input type="text" id="matCountry" placeholder="DE, RU, ..." maxlength="3"></label>
+      <label class="lbl-row">Titel<input type="text" id="matTitle" placeholder="z.B. Schlüsselbeobachtung"></label>
+      <label class="lbl-row">Inhalt<textarea id="matContent" rows="6" placeholder="Markdown mit **Fettung**"></textarea></label>
+      <label class="lbl-row">Quelle / URL<input type="text" id="matSource" placeholder="https://reuters.com/... oder 'Reuters 23.5.2026'"></label>
+      <label class="lbl-row">Tags (komma-getrennt)<input type="text" id="matTags" placeholder="militär, eskalation"></label>
+      <div class="lbl-row" style="gap:8px">
+        <button class="tb-btn" id="matSave" style="flex:1;background:var(--accent);color:#000">Speichern</button>
+        <button class="tb-btn" data-close="materialModal">Abbrechen</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Schwerpunkt verwalten -->
+<div id="focusModal" class="modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2 id="focusModalTitle">Neuer Schwerpunkt</h2>
+      <button class="closeBtn" data-close="focusModal">×</button>
+    </div>
+    <div class="modal-body">
+      <label class="lbl-row">Name<input type="text" id="focusName" placeholder="z.B. Militärische Lage"></label>
+      <label class="lbl-row">Beschreibung<textarea id="focusDesc" rows="3" placeholder="Was wird hier zusammengefasst?"></textarea></label>
+      <label class="lbl-row">Farbe<select id="focusColor">
+        <option value="#0a84ff">🔵 Blau</option>
+        <option value="#30d158">🟢 Grün</option>
+        <option value="#ff453a">🔴 Rot</option>
+        <option value="#ff9f0a">🟠 Orange</option>
+        <option value="#bf5af2">🟣 Lila</option>
+        <option value="#64d2ff">🟦 Türkis</option>
+        <option value="#ff375f">🩷 Pink</option>
+      </select></label>
+      <div class="lbl-row" style="gap:8px">
+        <button class="tb-btn" id="focusSave" style="flex:1;background:var(--accent);color:#000">Speichern</button>
+        <button class="tb-btn" data-close="focusModal">Abbrechen</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Notiz zu Land im Projekt -->
