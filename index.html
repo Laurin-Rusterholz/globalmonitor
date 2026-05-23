@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Global Monitor · Geopolitisches Lagebild</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 <link rel="stylesheet" href="assets/css/app.css" />
 </head>
 <body>
@@ -46,7 +48,17 @@
       <button class="tb-btn" id="planeBtn">✈ Flüge</button>
       <button class="tb-btn" id="shipBtn">⚓ Schiffe</button>
       <button class="tb-btn" id="osintBtn">📰 OSINT</button>
+      <button class="tb-btn" id="briefingBtn">📅 Briefing</button>
       <button class="tb-btn" id="compareBtn">⇆ Vergleich</button>
+      <button class="tb-btn" id="measureBtn">📏 Messen</button>
+      <button class="tb-btn" id="heatBtn">🔥 Heatmap</button>
+      <select class="tb-btn" id="timeWindow" title="Zeitfenster für Konflikt-Live-Daten">
+        <option value="1d">24h</option>
+        <option value="3d" selected>3 Tage</option>
+        <option value="7d">7 Tage</option>
+        <option value="1m">30 Tage</option>
+      </select>
+      <button class="tb-btn" id="shareBtn" title="Teilbaren Link kopieren">🔗 Link</button>
       <button class="tb-btn" id="legendBtn">☰ Legende</button>
     </div>
     <div id="compareBar">
@@ -67,7 +79,36 @@
     </div>
     <div id="clock"><b id="utcTime">--:--</b> UTC · <span id="evtTotal">0</span> Ereignisse</div>
     <div id="legend"></div>
+    <div class="measure-info" id="measureInfo">Klick zum Setzen, doppelklick zum Beenden. <b id="measureValue">0 km</b></div>
+    <div class="toast" id="toast"></div>
     <div id="map"></div>
+  </div>
+</div>
+
+<button id="sidebarToggle" class="tb-btn" title="Sidebar ein/aus">☰</button>
+
+<div id="briefing">
+  <div class="osint-head">
+    <div>
+      <div class="region">Globales Briefing</div>
+      <div class="coords" id="briefingMeta">KI-Synthese aller Live-Daten</div>
+    </div>
+    <button class="closeBtn" id="closeBriefing">×</button>
+  </div>
+  <div class="ai-body" id="briefingBody">
+    <div class="empty-state">Klick auf den 📅-Button oben, um die aktuelle Weltlage zusammenfassen zu lassen.</div>
+  </div>
+  <div class="ai-foot">
+    <div class="chips">
+      <span class="chip" data-bq="Welche 5 wichtigsten geopolitischen Ereignisse passieren gerade weltweit? Synthetisiere kompakt.">Top 5</span>
+      <span class="chip" data-bq="Wo sind aktuell die heißesten Eskalations-Zonen und warum?">Eskalation</span>
+      <span class="chip" data-bq="Welche Energie-/Rohstoffsignale lassen sich gerade beobachten?">Energie</span>
+      <span class="chip" data-bq="Was sind die wichtigsten OSINT-Meldungen der letzten Stunden?">OSINT-Sync</span>
+      <span class="chip" data-bq="Welche militärischen Bewegungen (Flugzeuge, Übungen, Verlegungen) sind gerade auffällig?">Mil-Bewegungen</span>
+    </div>
+    <div class="ask-row">
+      <button id="generateBriefing" class="tb-btn" style="flex:1;padding:10px">⚡ Briefing generieren</button>
+    </div>
   </div>
 </div>
 
@@ -118,6 +159,8 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet-side-by-side@2.2.0/leaflet-side-by-side.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <script src="assets/data/reference.js"></script>
 <script src="assets/js/app.js"></script>
 </body>

@@ -19,10 +19,79 @@ const CONFIG = {
   FIRMS_REFRESH_MS: 30 * 60 * 1000,
 };
 
+/* ════ STATE PERSISTENCE (localStorage + URL hash) ════ */
+const STATE_KEY = 'gm_state_v1';
+function loadState() {
+  try { return JSON.parse(localStorage.getItem(STATE_KEY) || '{}'); } catch { return {}; }
+}
+function saveState(patch) {
+  const cur = loadState();
+  const next = { ...cur, ...patch };
+  try { localStorage.setItem(STATE_KEY, JSON.stringify(next)); } catch {}
+}
+function parseUrlHash() {
+  // Format: #l=lat,lng,zoom&b=basemap&t=window&layers=k1,k2,k3
+  const h = location.hash.slice(1);
+  if (!h) return {};
+  const out = {};
+  h.split('&').forEach(p => {
+    const [k,v] = p.split('=');
+    if (k && v) out[k] = decodeURIComponent(v);
+  });
+  return out;
+}
+function buildUrlHash() {
+  const c = map.getCenter();
+  const z = map.getZoom();
+  const params = {
+    l: `${c.lat.toFixed(3)},${c.lng.toFixed(3)},${z}`,
+    b: typeof activeBaseKey !== 'undefined' ? activeBaseKey : 'dark',
+    t: timeWindow,
+  };
+  try {
+    if (typeof LAYERS !== 'undefined') {
+      params.layers = Object.entries(LAYERS).filter(([_,l]) => l.on).map(([k]) => k).join(',');
+    }
+  } catch {}
+  return '#' + Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+}
+function syncUrl() {
+  try { history.replaceState(null, '', buildUrlHash()); } catch {}
+}
+
+function toast(msg, ms=2200) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => t.classList.remove('show'), ms);
+}
+
+let timeWindow = '3d';  // 1d / 3d / 7d / 1m
+
 const R = window.REF;
 
 /* ════ MAP INIT ════ */
-const map = L.map('map', {zoomControl:true, worldCopyJump:true, minZoom:2, maxZoom:18}).setView([28, 25], 3);
+const map = L.map('map', {zoomControl:true, worldCopyJump:true, minZoom:2, maxZoom:18});
+(function initialView() {
+  const url = parseUrlHash();
+  const stored = loadState();
+  if (url.l) {
+    const [la,lo,z] = url.l.split(',').map(Number);
+    if (!isNaN(la) && !isNaN(lo)) map.setView([la,lo], z || 3);
+    else map.setView([28,25], 3);
+  } else if (stored.view) {
+    map.setView(stored.view.center, stored.view.zoom);
+  } else {
+    map.setView([28,25], 3);
+  }
+  if (url.t) timeWindow = url.t;
+  else if (stored.timeWindow) timeWindow = stored.timeWindow;
+})();
+map.on('moveend zoomend', () => {
+  saveState({ view: { center: [map.getCenter().lat, map.getCenter().lng], zoom: map.getZoom() } });
+  syncUrl();
+});
 // NASA GIBS - tägliche Satellitenbilder (VIIRS, gestern als Default für sichere Verfügbarkeit)
 function gibsDate(daysBack=1) {
   const d = new Date(Date.now() - daysBack * 86400000);
@@ -121,9 +190,20 @@ function switchBase(key, btn) {
   // Bei HLS sinnvolles Default-Datum (1 Woche zurück, da nicht täglich verfügbar)
   if (key === 'nasahd') document.getElementById('satDate').value = gibsDate(7);
   if (key === 'nasa') document.getElementById('satDate').value = gibsDate(1);
+  persistLayers();
 }
 // Bestehende Buttons auf switchBase umstellen
 document.querySelectorAll('.basemap-btn').forEach(b => { b.onclick = () => switchBase(b.dataset.base, b); });
+
+// Gespeicherte/URL-Basemap anwenden
+(function applyStoredBasemap() {
+  const url = parseUrlHash();
+  const stored = loadState();
+  const target = url.b || stored.basemap;
+  if (!target || target === activeBaseKey || !bases[target]) return;
+  const btn = document.querySelector(`.basemap-btn[data-base="${target}"]`);
+  if (btn) switchBase(target, btn);
+})();
 
 // NASA-Date-Picker initialisieren
 const satDateInput = document.getElementById('satDate');
@@ -256,7 +336,40 @@ const LAYERS = {
 };
 
 // LayerGroups initialisieren
-Object.values(LAYERS).forEach(l => { l.group = L.layerGroup(); if (l.on) l.group.addTo(map); });
+// Dense Layer mit Cluster, alle anderen normal
+const DENSE_LAYERS = ['ports','bases','navalBases','airBases','nuclear','launchSites','bri','exercises'];
+Object.entries(LAYERS).forEach(([key, l]) => {
+  if (DENSE_LAYERS.includes(key) && typeof L.markerClusterGroup === 'function') {
+    l.group = L.markerClusterGroup({
+      maxClusterRadius: 45, showCoverageOnHover: false, spiderfyOnMaxZoom: true,
+      iconCreateFunction: (cluster) => L.divIcon({
+        html: `<div><span>${cluster.getChildCount()}</span></div>`,
+        className: `marker-cluster marker-cluster-${cluster.getChildCount() < 10 ? 'small' : cluster.getChildCount() < 50 ? 'medium' : 'large'}`,
+        iconSize: L.point(40, 40)
+      })
+    });
+  } else {
+    l.group = L.layerGroup();
+  }
+  if (l.on) l.group.addTo(map);
+});
+
+// Stored layers anwenden (URL hat Vorrang)
+(function applyStoredLayers() {
+  const url = parseUrlHash();
+  const stored = loadState();
+  const explicitLayers = url.layers ?? stored.layers;
+  if (explicitLayers === undefined) return;
+  const wanted = new Set(explicitLayers.split(',').filter(Boolean));
+  Object.entries(LAYERS).forEach(([key, l]) => {
+    const want = wanted.has(key);
+    if (want !== l.on) {
+      l.on = want;
+      if (want) l.group.addTo(map);
+      else map.removeLayer(l.group);
+    }
+  });
+})();
 
 /* ════ KATEGORIEN-UI ════ */
 const CATEGORIES = [
@@ -361,6 +474,18 @@ function toggleLayer(key, el) {
     if (key === 'ships') stopShips();
     if (key === 'thermal') stopThermal();
   }
+  persistLayers();
+}
+
+function persistLayers() {
+  try {
+    const layersDefined = typeof LAYERS !== 'undefined';
+    const activeLayers = layersDefined
+      ? Object.entries(LAYERS).filter(([_,l]) => l.on).map(([k]) => k).join(',')
+      : (loadState().layers || '');
+    saveState({ layers: activeLayers, basemap: activeBaseKey, timeWindow });
+    syncUrl();
+  } catch {/* früh im Init */ }
 }
 
 function setCnt(k, v) {
@@ -513,11 +638,12 @@ async function loadConflicts() {
 
   if (CONFIG.USE_BACKEND) {
     try {
-      const res = await fetch(`${CONFIG.BACKEND_BASE}/conflicts`);
+      const res = await fetch(`${CONFIG.BACKEND_BASE}/conflicts?timespan=${encodeURIComponent(timeWindow)}`);
       if (!res.ok) throw new Error('HTTP '+res.status);
       const data = await res.json();
       placeConflicts(data.events || []);
-      setStatus(`${conflictStore.length} Live-Konflikte`, 'ok');
+      setStatus(`${conflictStore.length} Live-Konflikte (${timeWindow})`, 'ok');
+      rebuildHeatmap();
     } catch (e) {
       console.error('Conflicts:', e);
       useDemoConflicts('Backend-Fehler');
@@ -694,6 +820,7 @@ async function loadThermal() {
       .addTo(LAYERS.thermal.group);
     });
     setCnt('thermal', fires.length + (data.demo ? ' demo' : ''));
+    rebuildHeatmap();
   } catch (e) {
     console.error('Thermal:', e);
     setCnt('thermal', '!');
@@ -726,6 +853,7 @@ async function loadGdeltMil() {
       .addTo(LAYERS.gdeltMil.group);
     });
     setCnt('gdeltMil', events.length);
+    rebuildHeatmap();
   } catch (e) {
     console.error('GdeltMil:', e);
     setCnt('gdeltMil', '!');
@@ -950,6 +1078,7 @@ window.askAboutRegion = function(lat, lng, name) {
 };
 
 map.on('click', async e => {
+  if (measureActive) return; // im Mess-Modus keine Region öffnen
   openRegion(e.latlng.lat, e.latlng.lng);
 });
 
@@ -1124,6 +1253,192 @@ function buildLegend() {
 document.getElementById('backendNote').textContent = CONFIG.USE_BACKEND
   ? 'Backend aktiv · Live-Daten via Netlify Functions'
   : 'Demo-Modus';
+
+/* ════ ZEITFENSTER-FILTER ════ */
+const timeWindowSel = document.getElementById('timeWindow');
+if (timeWindowSel) {
+  timeWindowSel.value = timeWindow;
+  timeWindowSel.onchange = () => {
+    timeWindow = timeWindowSel.value;
+    persistLayers();
+    loadConflicts();
+    if (LAYERS.gdeltMil.on) loadGdeltMil();
+    toast(`Zeitfenster: ${timeWindow}`);
+  };
+}
+
+/* ════ CONFLICT-HEATMAP ════ */
+let heatLayer = null;
+let heatActive = false;
+function rebuildHeatmap() {
+  if (!heatActive || typeof L.heatLayer !== 'function') return;
+  if (heatLayer) map.removeLayer(heatLayer);
+  const points = [];
+  conflictStore.forEach(e => points.push([e.la, e.lo, Math.min((e.count||1)/3, 1.0)]));
+  thermalStore.forEach(f => points.push([f.la, f.lo, 0.8]));
+  gdeltMilStore.forEach(e => points.push([e.la, e.lo, Math.min((e.count||1)/3, 0.7)]));
+  heatLayer = L.heatLayer(points, { radius: 25, blur: 20, maxZoom: 8,
+    gradient: {0.2:'#21c7d6', 0.4:'#ffe14d', 0.6:'#ff7847', 0.8:'#ff4d3d', 1.0:'#ff0033'} }).addTo(map);
+}
+document.getElementById('heatBtn').onclick = () => {
+  heatActive = !heatActive;
+  document.getElementById('heatBtn').classList.toggle('active', heatActive);
+  if (heatActive) { rebuildHeatmap(); toast('Heatmap aktiv'); }
+  else if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
+};
+
+/* ════ DISTANZ-MESSWERKZEUG ════ */
+let measureActive = false;
+let measurePoints = [];
+let measureLine = null;
+let measureMarkers = [];
+function fmtKm(km) { return km < 1 ? `${Math.round(km*1000)} m` : `${km.toFixed(1)} km`; }
+function clearMeasure() {
+  if (measureLine) { map.removeLayer(measureLine); measureLine = null; }
+  measureMarkers.forEach(m => map.removeLayer(m));
+  measureMarkers = [];
+  measurePoints = [];
+  document.getElementById('measureValue').textContent = '0 km';
+}
+function measureClick(e) {
+  if (!measureActive) return;
+  e.originalEvent?.stopPropagation();
+  measurePoints.push(e.latlng);
+  measureMarkers.push(L.circleMarker(e.latlng, {radius:4, color:'#21c7d6', fillColor:'#21c7d6', fillOpacity:1, weight:1}).addTo(map));
+  if (measureLine) map.removeLayer(measureLine);
+  measureLine = L.polyline(measurePoints, {color:'#21c7d6', weight:2, dashArray:'5 5'}).addTo(map);
+  let total = 0;
+  for (let i = 1; i < measurePoints.length; i++) {
+    total += distanceKm(measurePoints[i-1].lat, measurePoints[i-1].lng, measurePoints[i].lat, measurePoints[i].lng);
+  }
+  document.getElementById('measureValue').textContent = fmtKm(total);
+}
+document.getElementById('measureBtn').onclick = () => {
+  measureActive = !measureActive;
+  document.getElementById('measureBtn').classList.toggle('active', measureActive);
+  document.getElementById('measureInfo').classList.toggle('show', measureActive);
+  if (measureActive) {
+    clearMeasure();
+    map._container.style.cursor = 'crosshair';
+    map.on('click', measureClick);
+    map.on('dblclick', stopMeasure);
+    map.doubleClickZoom.disable();
+    // Region-Click temporär aus
+    measureClickHandlerInstalled = true;
+  } else {
+    stopMeasure();
+  }
+};
+function stopMeasure() {
+  measureActive = false;
+  document.getElementById('measureBtn').classList.remove('active');
+  document.getElementById('measureInfo').classList.remove('show');
+  map._container.style.cursor = '';
+  map.off('click', measureClick);
+  map.off('dblclick', stopMeasure);
+  map.doubleClickZoom.enable();
+  setTimeout(clearMeasure, 3000);
+}
+let measureClickHandlerInstalled = false;
+
+/* ════ SHARE-LINK ════ */
+document.getElementById('shareBtn').onclick = async () => {
+  const url = location.origin + location.pathname + buildUrlHash();
+  try {
+    await navigator.clipboard.writeText(url);
+    toast('Link kopiert ✓');
+  } catch {
+    prompt('Link kopieren:', url);
+  }
+};
+
+/* ════ MOBILE SIDEBAR ════ */
+const sidebarToggleBtn = document.getElementById('sidebarToggle');
+if (sidebarToggleBtn) {
+  sidebarToggleBtn.onclick = () => {
+    document.getElementById('sidebar').classList.toggle('open');
+  };
+}
+
+/* ════ AI BRIEFING ════ */
+let briefingHistory = [];
+function gatherGlobalContext() {
+  const lines = [];
+  if (conflictStore.length) {
+    const top = conflictStore.slice().sort((a,b) => (b.count||0)-(a.count||0)).slice(0, 12);
+    lines.push(`KONFLIKT-EREIGNISSE (letzte ${timeWindow}, top 12 von ${conflictStore.length}):`);
+    top.forEach(c => lines.push(` - ${c.n} (${c.c||'-'}, ${c.count||1}x): ${c.i||''}`));
+  }
+  if (milPlaneStore.length) {
+    lines.push(`\nLIVE MILITÄRFLÜGE (gerade in der Luft, ${milPlaneStore.length}):`);
+    milPlaneStore.slice(0, 15).forEach(p => lines.push(` - ${p.callsign||p.icao} bei ${p.la?.toFixed(1)},${p.lo?.toFixed(1)} (${p.country||'?'})`));
+  }
+  if (thermalStore.length) {
+    lines.push(`\nTHERMAL-ANOMALIEN (FIRMS): ${thermalStore.length} Detektionen, hellste:`);
+    thermalStore.slice().sort((a,b)=>b.bright-a.bright).slice(0,10).forEach(f =>
+      lines.push(` - ${Math.round(f.bright)}K bei ${f.la.toFixed(1)},${f.lo.toFixed(1)}${f.region?' ['+f.region+']':''}`));
+  }
+  if (gdeltMilStore.length) {
+    lines.push(`\nGDELT MILITÄR-THEMEN (${gdeltMilStore.length}):`);
+    gdeltMilStore.slice(0, 10).forEach(e => lines.push(` - [${e.c}] ${e.n}: ${e.i||''}`));
+  }
+  if (osintStore.length) {
+    lines.push(`\nOSINT-MELDUNGEN (jüngste 15):`);
+    osintStore.slice(0, 15).forEach(it => lines.push(` - [${it.source}] ${it.title}`));
+  }
+  return lines.join('\n');
+}
+
+async function generateBriefing(customQuestion) {
+  const panel = document.getElementById('briefing');
+  const body = document.getElementById('briefingBody');
+  panel.classList.add('open');
+  const q = customQuestion || 'Fasse die aktuelle globale Sicherheits- und Geopolitik-Lage knapp und priorisiert zusammen. Markiere die wichtigsten Hotspots, Eskalationen, ungewöhnliche Bewegungen. Nutze die mitgelieferten Live-Daten.';
+  briefingHistory.push({ role: 'user', content: q });
+  body.innerHTML += `<div class="msg user">${escapeHtml(q)}</div><div class="msg ai thinking" id="briefingThink">Analysiere weltweite Live-Daten…</div>`;
+  body.scrollTop = body.scrollHeight;
+  document.getElementById('briefingMeta').textContent = `KI-Synthese · ${conflictStore.length}K / ${milPlaneStore.length}MIL-AC / ${thermalStore.length}Th / ${osintStore.length}OSINT`;
+
+  if (!CONFIG.USE_BACKEND) {
+    document.getElementById('briefingThink').textContent = 'Backend nicht aktiv.';
+    return;
+  }
+  const sys = `Du bist ein erfahrener geopolitischer Lageanalyst, der ein tägliches Sicherheitsbriefing erstellt. Synthetisiere die unten mitgelieferten Live-Daten (Konflikt-Events, Militärflüge, Thermal-Anomalien, OSINT-Meldungen). Sei prägnant, priorisiere, nenne konkrete Orte/Akteure/Zahlen. Strukturiere mit **Fettung** als Zwischenüberschriften. Antworte auf Deutsch, max. 400 Wörter. Mark Unsicherheiten offen.
+
+LIVE-DATEN-SNAPSHOT (Zeitfenster: ${timeWindow}):
+${gatherGlobalContext()}`;
+
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/ai`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ system: sys, messages: briefingHistory })
+    });
+    if (!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim() || '(Keine Antwort)';
+    briefingHistory.push({ role:'assistant', content:text });
+    const th = document.getElementById('briefingThink');
+    th.classList.remove('thinking');
+    th.id = '';
+    th.innerHTML = text.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  } catch (e) {
+    const th = document.getElementById('briefingThink');
+    th.classList.remove('thinking');
+    th.textContent = 'Fehler: ' + e.message;
+  }
+  body.scrollTop = body.scrollHeight;
+}
+document.getElementById('briefingBtn').onclick = () => {
+  const panel = document.getElementById('briefing');
+  const isOpen = panel.classList.contains('open');
+  panel.classList.toggle('open');
+  if (!isOpen && !briefingHistory.length) generateBriefing();
+};
+document.getElementById('closeBriefing').onclick = () => {
+  document.getElementById('briefing').classList.remove('open');
+};
+document.getElementById('generateBriefing').onclick = () => generateBriefing();
+document.querySelectorAll('#briefing .chip').forEach(c => c.onclick = () => generateBriefing(c.dataset.bq));
 
 /* ════ START ════ */
 buildCategoryUI();

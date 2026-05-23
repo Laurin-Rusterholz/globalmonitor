@@ -1,5 +1,4 @@
-// GDELT Konfliktdaten - Proxy mit Cache
-let cache = { data: null, time: 0 };
+// GDELT Konfliktdaten - Proxy mit Cache pro Zeitfenster
 const TTL = 10 * 60 * 1000;
 
 const QUERIES = [
@@ -8,15 +7,21 @@ const QUERIES = [
   { c: 'protest',  q: '(protest OR unrest OR riots OR demonstration OR "civil unrest")' },
 ];
 
-exports.handler = async () => {
-  if (cache.data && Date.now() - cache.time < TTL) return json(cache.data);
+const ALLOWED_TIMESPANS = ['1h','6h','12h','1d','3d','7d','1m'];
+const cacheByWindow = {};
+
+exports.handler = async (event) => {
+  const t = (event.queryStringParameters?.timespan || '3d');
+  const timespan = ALLOWED_TIMESPANS.includes(t) ? t : '3d';
+  const slot = cacheByWindow[timespan];
+  if (slot && Date.now() - slot.time < TTL) return json(slot.data);
 
   const events = [];
   const errors = [];
   await Promise.all(QUERIES.map(async item => {
     try {
       const url = 'https://api.gdeltproject.org/api/v2/geo/geo?query=' +
-        encodeURIComponent(item.q) + '&format=geojson&timespan=3d&maxpoints=200';
+        encodeURIComponent(item.q) + `&format=geojson&timespan=${timespan}&maxpoints=200`;
       const res = await fetch(url, { headers: { 'User-Agent': 'GlobalMonitor/1.0' } });
       if (!res.ok) throw new Error('GDELT ' + res.status);
       const data = await res.json();
@@ -35,8 +40,8 @@ exports.handler = async () => {
     } catch (e) { errors.push(`${item.c}:${e.message}`); }
   }));
 
-  const data = { events, errors, updated: new Date().toISOString() };
-  cache = { data, time: Date.now() };
+  const data = { events, errors, timespan, updated: new Date().toISOString() };
+  cacheByWindow[timespan] = { data, time: Date.now() };
   return json(data);
 };
 
