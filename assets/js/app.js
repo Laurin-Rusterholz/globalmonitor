@@ -1245,76 +1245,120 @@ function fmtLeaderWithDate(name, startDate) {
   return `${name} (seit ${d.getFullYear()})`;
 }
 
+function flagEmoji(iso2) {
+  if (!iso2 || iso2.length !== 2) return '🏳️';
+  try {
+    return iso2.toUpperCase().split('').map(c =>
+      String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65)
+    ).join('');
+  } catch { return '🏳️'; }
+}
+
+function fmtArea(km2) {
+  if (!km2) return '–';
+  if (km2 >= 1e6) return (km2/1e6).toFixed(2)+' Mio km²';
+  if (km2 >= 1e3) return (km2/1e3).toFixed(0)+' k km²';
+  return Math.round(km2)+' km²';
+}
+
 function renderCountryInfo(iso2, profile, economic, live) {
   const ciDiv = document.getElementById('countryInfo');
-  let html = '';
+  const aiUp = currentRegion.aiUpdate;
+  const name = profile?.name || currentRegion.name || iso2;
+  const flag = flagEmoji(iso2);
+  const inBasket = comparedCountries.some(c => c.iso === iso2);
 
-  // ════ POLITISCHES PROFIL (live + static merge) ════
-  const cap   = pickField(live, profile, 'capital');
-  const gov   = pickField(live, profile, 'govType');
-  const head  = live?.headOfState ? { val: fmtLeaderWithDate(live.headOfState, live.headOfStateStart), src:'live' }
-              : profile?.leader   ? { val: profile.leader, src:'static' } : null;
-  const pm    = live?.headOfGovernment && live.headOfGovernment !== live.headOfState
-              ? { val: fmtLeaderWithDate(live.headOfGovernment, live.headOfGovernmentStart), src:'live' } : null;
-  const aiUp  = currentRegion.aiUpdate;
+  // ═══ HERO ═══
+  const heroMeta = [];
+  if (live?.continent) heroMeta.push(live.continent);
+  if (live?.demonym) heroMeta.push(live.demonym);
+  if (live?.iso3) heroMeta.push(live.iso3);
+  if (live?.callingCode) heroMeta.push('Vorwahl '+live.callingCode);
 
-  const ruling = aiUp?.ruling ? {val:aiUp.ruling, src:'ai'} : (profile?.ruling ? {val:profile.ruling, src:'static'} : null);
-  const election = aiUp?.nextElection ? {val:aiUp.nextElection, src:'ai'} : (profile?.nextElection ? {val:profile.nextElection, src:'static'} : null);
-  const context = aiUp?.context ? {val:aiUp.context, src:'ai'} : (profile?.context ? {val:profile.context, src:'static'} : null);
-  const notes = aiUp?.notes ? {val:aiUp.notes, src:'ai'} : (profile?.notes ? {val:profile.notes, src:'static'} : null);
+  let html = `<div class="ci-hero">
+    <div class="ci-flag">${flag}</div>
+    <div class="ci-hero-text">
+      <div class="ci-hero-name">${escapeHtml(name)}</div>
+      <div class="ci-hero-meta">${heroMeta.join(' · ')||'&nbsp;'}</div>
+    </div>
+    <div class="ci-hero-tools">
+      <button id="ciAiUpdateBtn" title="Via KI aktualisieren">🤖 KI-Update</button>
+      <button id="ciCompareBtn" title="Zum Vergleich hinzufügen">${inBasket?'✓ Im Vergleich':'＋ Vergleich'}</button>
+    </div>
+  </div>`;
 
-  if (cap || gov || head || profile) {
-    html += `<div class="ci-section">
-      <div class="ci-section-title">
-        Politisches Profil
-        <button class="ci-refresh" id="ciAiUpdateBtn" title="Via KI aktualisieren">🤖 KI</button>
-      </div>`;
-    if (cap)   html += `<div class="ci-row"><span>Hauptstadt ${srcBadge(cap.src)}</span><b>${escapeHtml(cap.val)}</b></div>`;
-    if (gov)   html += `<div class="ci-row"><span>Regierungsform ${srcBadge(gov.src)}</span><b>${escapeHtml(gov.val)}</b></div>`;
-    if (head)  html += `<div class="ci-row ci-row-wide"><span>Staatsoberhaupt ${srcBadge(head.src)}</span><b>${escapeHtml(head.val)}</b></div>`;
-    if (pm)    html += `<div class="ci-row ci-row-wide"><span>Regierungschef ${srcBadge(pm.src)}</span><b>${escapeHtml(pm.val)}</b></div>`;
-    if (ruling)html += `<div class="ci-row ci-row-wide"><span>Regierungspartei ${srcBadge(ruling.src)}</span><b>${escapeHtml(ruling.val)}</b></div>`;
-    if (election) html += `<div class="ci-row ci-row-wide"><span>Nächste Wahl ${srcBadge(election.src)}</span><b>${escapeHtml(election.val)}</b></div>`;
-    if (profile?.alliances?.length) html += `<div class="ci-row ci-row-wide"><span>Allianzen ${srcBadge('static')}</span><b>${profile.alliances.join(', ')}</b></div>`;
-    if (live?.currency) html += `<div class="ci-row"><span>Währung ${srcBadge('live')}</span><b>${escapeHtml(live.currency)}${live.currencyCode?` (${live.currencyCode})`:''}</b></div>`;
-    if (context) html += `<div class="ci-context">${escapeHtml(context.val)} ${srcBadge(context.src)}</div>`;
-    if (notes) html += `<div class="ci-note">${escapeHtml(notes.val)} ${srcBadge(notes.src)}</div>`;
-    if (live?.sourceUpdated) {
-      const date = new Date(live.sourceUpdated).toLocaleString('de-CH', {dateStyle:'medium', timeStyle:'short'});
-      html += `<div class="ci-source-note">Wikidata abgerufen ${date}${live.fromCache?' (Cache)':''}</div>`;
-    }
+  // ═══ STAT-TILES (Bev/BIP/Mil) ═══
+  if (economic || live?.area) {
+    html += `<div class="ci-tiles">`;
+    html += `<div class="ci-tile"><div class="ci-tile-label">Bevölkerung</div><div class="ci-tile-val">${fmtNum(economic?.population || live?.population)}</div><div class="ci-tile-sub">${economic?.population?'WB':'WD'}</div></div>`;
+    html += `<div class="ci-tile"><div class="ci-tile-label">BIP/Kopf</div><div class="ci-tile-val">${fmtMoney(economic?.gdpPerCapita)}</div><div class="ci-tile-sub">USD</div></div>`;
+    html += `<div class="ci-tile"><div class="ci-tile-label">Fläche</div><div class="ci-tile-val">${fmtArea(live?.area)}</div><div class="ci-tile-sub">km²</div></div>`;
     html += `</div>`;
   }
 
-  // ════ WIRTSCHAFT ════
+  // ═══ POLITIK ═══
+  const cap   = live?.capital || profile?.capital;
+  const gov   = live?.govType || profile?.govType;
+  const head  = live?.headOfState ? fmtLeaderWithDate(live.headOfState, live.headOfStateStart) : profile?.leader;
+  const headSrc = live?.headOfState ? 'live' : 'static';
+  const pm    = live?.headOfGovernment && live.headOfGovernment !== live.headOfState
+              ? fmtLeaderWithDate(live.headOfGovernment, live.headOfGovernmentStart) : null;
+  const ruling = aiUp?.ruling || profile?.ruling;
+  const election = aiUp?.nextElection || profile?.nextElection;
+  const context = aiUp?.context || profile?.context;
+  const notes = aiUp?.notes || profile?.notes;
+
+  html += `<div class="ci-section">
+    <div class="ci-section-title">Politik & Staat</div>`;
+  if (cap)    html += `<div class="ci-row"><span>Hauptstadt ${srcBadge(live?.capital?'live':'static')}</span><b>${escapeHtml(cap)}</b></div>`;
+  if (gov)    html += `<div class="ci-row"><span>Regierungsform ${srcBadge(live?.govType?'live':'static')}</span><b>${escapeHtml(gov)}</b></div>`;
+  if (head)   html += `<div class="ci-row ci-row-wide"><span>Staatsoberhaupt ${srcBadge(headSrc)}</span><b>${escapeHtml(head)}</b></div>`;
+  if (pm)     html += `<div class="ci-row ci-row-wide"><span>Regierungschef ${srcBadge('live')}</span><b>${escapeHtml(pm)}</b></div>`;
+  if (ruling) html += `<div class="ci-row ci-row-wide"><span>Regierungspartei ${srcBadge(aiUp?.ruling?'ai':'static')}</span><b>${escapeHtml(ruling)}</b></div>`;
+  if (election)html+= `<div class="ci-row ci-row-wide"><span>Nächste Wahl ${srcBadge(aiUp?.nextElection?'ai':'static')}</span><b>${escapeHtml(election)}</b></div>`;
+  if (profile?.alliances?.length) html += `<div class="ci-row ci-row-wide"><span>Allianzen ${srcBadge('static')}</span><b>${profile.alliances.join(', ')}</b></div>`;
+  if (live?.memberships?.length) {
+    const mems = live.memberships.slice(0,8).join(', ');
+    html += `<div class="ci-row ci-row-wide"><span>Mitgliedschaften ${srcBadge('live')}</span><b>${escapeHtml(mems)}</b></div>`;
+  }
+  html += `</div>`;
+
+  if (context) html += `<div class="ci-section"><div class="ci-section-title">Kontext ${srcBadge(aiUp?.context?'ai':'static')}</div><div class="ci-context" style="border:none;padding:0;background:none">${escapeHtml(context)}</div>${notes?`<div class="ci-note">${escapeHtml(notes)}</div>`:''}</div>`;
+
+  // ═══ WIRTSCHAFT ═══
   if (economic) {
     html += `<div class="ci-section">
       <div class="ci-section-title">Wirtschaft <span class="src-badge src-wb">World Bank</span></div>
-      <div class="ci-row"><span>Bevölkerung</span><b>${fmtNum(economic.population)}</b></div>
-      <div class="ci-row"><span>BIP (USD)</span><b>${fmtMoney(economic.gdp)}</b></div>
-      <div class="ci-row"><span>BIP/Kopf</span><b>${fmtMoney(economic.gdpPerCapita)}</b></div>
-      <div class="ci-row"><span>Militärausg. (% BIP)</span><b>${economic.militaryPct ? economic.militaryPct.toFixed(2)+'%' : '–'}</b></div>
-      <div class="ci-row"><span>Inflation</span><b>${economic.inflation ? economic.inflation.toFixed(2)+'%' : '–'}</b></div>
-      <div class="ci-row"><span>Lebenserwartung</span><b>${economic.lifeExp ? economic.lifeExp.toFixed(1)+' J' : '–'}</b></div>
-    </div>`;
-  }
-  if (live?.area) {
-    html += `<div class="ci-section">
-      <div class="ci-section-title">Geografie <span class="src-badge src-live">Wikidata</span></div>
-      <div class="ci-row"><span>Fläche</span><b>${fmtNum(live.area)} km²</b></div>
-      ${live.inception ? `<div class="ci-row"><span>Gründung</span><b>${new Date(live.inception).getFullYear()}</b></div>` : ''}
+      <div class="ci-row"><span>BIP gesamt</span><b>${fmtMoney(economic.gdp)}</b></div>
+      <div class="ci-row"><span>BIP pro Kopf</span><b>${fmtMoney(economic.gdpPerCapita)}</b></div>
+      <div class="ci-row"><span>Militärausgaben</span><b>${economic.militaryPct?economic.militaryPct.toFixed(2)+'% BIP':'–'}</b></div>
+      <div class="ci-row"><span>Inflation</span><b>${economic.inflation?economic.inflation.toFixed(2)+'%':'–'}</b></div>
+      <div class="ci-row"><span>Lebenserwartung</span><b>${economic.lifeExp?economic.lifeExp.toFixed(1)+' J':'–'}</b></div>
     </div>`;
   }
 
-  if (!html) {
-    html = `<div class="ci-note">Keine Daten für ${iso2}. <button class="ci-refresh" id="ciAiUpdateBtn">🤖 KI versuchen</button></div>`;
+  // ═══ GEOGRAFIE & SOZIO ═══
+  if (live?.area || live?.languages?.length || live?.borders?.length) {
+    html += `<div class="ci-section"><div class="ci-section-title">Geografie & Gesellschaft ${srcBadge('live')}</div>`;
+    if (live.area) html += `<div class="ci-row"><span>Fläche</span><b>${fmtNum(live.area)} km²</b></div>`;
+    if (live.inception) html += `<div class="ci-row"><span>Gründung</span><b>${new Date(live.inception).getFullYear()}</b></div>`;
+    if (live.currency) html += `<div class="ci-row"><span>Währung</span><b>${escapeHtml(live.currency)}${live.currencyCode?` (${live.currencyCode})`:''}</b></div>`;
+    if (live.languages?.length) html += `<div class="ci-row ci-row-wide"><span>Amtssprachen</span><b>${live.languages.slice(0,5).join(', ')}</b></div>`;
+    if (live.religions?.length) html += `<div class="ci-row ci-row-wide"><span>Religionen</span><b>${live.religions.slice(0,4).join(', ')}</b></div>`;
+    if (live.borders?.length) html += `<div class="ci-row ci-row-wide"><span>Nachbarn (${live.borders.length})</span><b>${live.borders.slice(0,8).join(', ')}${live.borders.length>8?'…':''}</b></div>`;
+    if (live.anthem) html += `<div class="ci-row ci-row-wide"><span>Hymne</span><b>${escapeHtml(live.anthem)}</b></div>`;
+    html += `</div>`;
+  }
+
+  if (live?.sourceUpdated) {
+    const date = new Date(live.sourceUpdated).toLocaleString('de-CH', {dateStyle:'medium', timeStyle:'short'});
+    html += `<div class="ci-source-note">Wikidata abgerufen ${date}${live.fromCache?' (Cache)':''}</div>`;
   }
 
   ciDiv.innerHTML = html;
   ciDiv.classList.add('show');
-
-  // KI-Update-Button verdrahten
   document.getElementById('ciAiUpdateBtn')?.addEventListener('click', () => doAiUpdate(iso2));
+  document.getElementById('ciCompareBtn')?.addEventListener('click', () => toggleCompareCountry(iso2, name));
 }
 
 async function doAiUpdate(iso2) {
@@ -2383,6 +2427,202 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(item => {
   };
 });
 
+/* ════════════════════════════════════════════════════════════════
+   MULTI-COUNTRY-VERGLEICH
+   ════════════════════════════════════════════════════════════════ */
+const CMP_KEY = 'gm_compare_v1';
+let comparedCountries = [];
+
+function loadComparedCountries() {
+  try { comparedCountries = JSON.parse(localStorage.getItem(CMP_KEY) || '[]'); } catch { comparedCountries = []; }
+  renderBasket();
+}
+function persistCompared() { try { localStorage.setItem(CMP_KEY, JSON.stringify(comparedCountries.map(c => ({iso:c.iso, name:c.name})))); } catch {} }
+
+async function toggleCompareCountry(iso, name) {
+  const existingIdx = comparedCountries.findIndex(c => c.iso === iso);
+  if (existingIdx >= 0) {
+    comparedCountries.splice(existingIdx, 1);
+    toast(`${name} aus Vergleich entfernt`);
+  } else {
+    if (comparedCountries.length >= 6) { toast('Max 6 Länder vergleichbar'); return; }
+    // Daten laden falls noch nicht vorhanden
+    const live = await fetchWikidata(iso);
+    const economic = await fetchEconomic(iso);
+    const profile = window.getCountryProfile?.(iso);
+    comparedCountries.push({ iso, name, profile, live, economic });
+    toast(`${name} zum Vergleich hinzugefügt`);
+  }
+  persistCompared();
+  renderBasket();
+  // Wenn Country-Panel offen, neu rendern (Button-Status)
+  if (currentRegion?.iso2 === iso) {
+    renderCountryInfo(iso, currentRegion.profile, currentRegion.economic, currentRegion.live);
+  }
+}
+
+function renderBasket() {
+  const basket = document.getElementById('compareBasket');
+  const chips = document.getElementById('cmpChips');
+  const cnt = document.getElementById('cmpCount');
+  const openBtn = document.getElementById('cmpOpenBtn');
+  cnt.textContent = comparedCountries.length;
+  if (comparedCountries.length === 0) {
+    basket.classList.remove('show');
+    return;
+  }
+  basket.classList.add('show');
+  chips.innerHTML = comparedCountries.map(c => `
+    <div class="cmp-chip"><span class="fl">${flagEmoji(c.iso)}</span><span>${escapeHtml(c.name)}</span><span class="x" data-iso="${c.iso}">×</span></div>
+  `).join('');
+  chips.querySelectorAll('.x').forEach(x => x.onclick = () => toggleCompareCountry(x.dataset.iso, comparedCountries.find(c=>c.iso===x.dataset.iso)?.name||x.dataset.iso));
+  openBtn.disabled = comparedCountries.length < 2;
+}
+
+document.getElementById('cmpClearAll')?.addEventListener('click', () => {
+  comparedCountries = []; persistCompared(); renderBasket();
+});
+document.getElementById('cmpOpenBtn')?.addEventListener('click', openComparePanel);
+
+async function refreshCompareDataIfStale() {
+  // Lade fehlende Daten nach (z.B. nach Reload)
+  for (const c of comparedCountries) {
+    if (!c.live) c.live = await fetchWikidata(c.iso);
+    if (!c.economic) c.economic = await fetchEconomic(c.iso);
+    if (!c.profile) c.profile = window.getCountryProfile?.(c.iso);
+  }
+}
+
+async function openComparePanel() {
+  document.getElementById('comparePanel').classList.add('open');
+  document.getElementById('cmpPanelSub').textContent = `${comparedCountries.length} Länder`;
+  await refreshCompareDataIfStale();
+  renderComparePanel();
+}
+document.getElementById('closeComparePanel')?.addEventListener('click', () => {
+  document.getElementById('comparePanel').classList.remove('open');
+});
+
+function renderComparePanel() {
+  const body = document.getElementById('comparePanelBody');
+  const cols = Math.min(comparedCountries.length, 4);
+
+  // Cards-Bereich
+  let html = `<div class="cmp-grid cols-${cols}">`;
+  comparedCountries.forEach(c => {
+    const p = c.profile, l = c.live, e = c.economic;
+    html += `<div class="cmp-card">
+      <div class="cmp-card-head">
+        <div class="cmp-card-flag">${flagEmoji(c.iso)}</div>
+        <div>
+          <div class="cmp-card-name">${escapeHtml(c.name)}</div>
+          <div class="cmp-card-cap">${escapeHtml(l?.capital||p?.capital||'–')}</div>
+        </div>
+      </div>
+      ${l?.headOfState ? `<div class="cmp-card-row"><span>Staat</span><b>${escapeHtml(fmtLeaderWithDate(l.headOfState, l.headOfStateStart))}</b></div>`:''}
+      ${l?.headOfGovernment && l.headOfGovernment !== l.headOfState ? `<div class="cmp-card-row"><span>Reg.</span><b>${escapeHtml(fmtLeaderWithDate(l.headOfGovernment, l.headOfGovernmentStart))}</b></div>`:''}
+      ${(l?.govType||p?.govType) ? `<div class="cmp-card-row"><span>System</span><b>${escapeHtml(l?.govType||p?.govType)}</b></div>`:''}
+      ${p?.alliances?.length ? `<div class="cmp-card-row"><span>Allianz</span><b>${p.alliances.slice(0,3).join(', ')}</b></div>`:''}
+
+      <div class="cmp-card-section">Wirtschaft</div>
+      <div class="cmp-card-row"><span>BIP</span><b>${fmtMoney(e?.gdp)}</b></div>
+      <div class="cmp-card-row"><span>BIP/Kopf</span><b>${fmtMoney(e?.gdpPerCapita)}</b></div>
+      <div class="cmp-card-row"><span>Mil. % BIP</span><b>${e?.militaryPct?e.militaryPct.toFixed(2)+'%':'–'}</b></div>
+      <div class="cmp-card-row"><span>Inflation</span><b>${e?.inflation?e.inflation.toFixed(1)+'%':'–'}</b></div>
+
+      <div class="cmp-card-section">Größen</div>
+      <div class="cmp-card-row"><span>Bevölk.</span><b>${fmtNum(e?.population||l?.population)}</b></div>
+      <div class="cmp-card-row"><span>Fläche</span><b>${fmtArea(l?.area)}</b></div>
+      <div class="cmp-card-row"><span>Lebenserw.</span><b>${e?.lifeExp?e.lifeExp.toFixed(1)+'J':'–'}</b></div>
+    </div>`;
+  });
+  html += `</div>`;
+
+  // Metric-Vergleichs-Tabelle mit Bars
+  const metrics = [
+    {key:'gdp', label:'BIP (USD)', get:c=>c.economic?.gdp, fmt:fmtMoney, higherBetter:true},
+    {key:'gdpPerCapita', label:'BIP/Kopf', get:c=>c.economic?.gdpPerCapita, fmt:fmtMoney, higherBetter:true},
+    {key:'population', label:'Bevölkerung', get:c=>c.economic?.population||c.live?.population, fmt:fmtNum, higherBetter:false},
+    {key:'area', label:'Fläche km²', get:c=>c.live?.area, fmt:fmtNum, higherBetter:false},
+    {key:'militaryPct', label:'Mil. % BIP', get:c=>c.economic?.militaryPct, fmt:v=>v?v.toFixed(2)+'%':'–', higherBetter:null},
+    {key:'lifeExp', label:'Lebenserwartung', get:c=>c.economic?.lifeExp, fmt:v=>v?v.toFixed(1)+'J':'–', higherBetter:true},
+    {key:'inflation', label:'Inflation %', get:c=>c.economic?.inflation, fmt:v=>v?v.toFixed(2)+'%':'–', higherBetter:false},
+  ];
+  html += `<h3 style="font-family:var(--font-display);font-size:14px;color:var(--accent);margin:18px 0 8px">Direkt-Vergleich</h3>`;
+  html += `<table class="cmp-metric-table"><thead><tr><th>Kennzahl</th>`;
+  comparedCountries.forEach(c => html += `<th>${flagEmoji(c.iso)} ${escapeHtml(c.name)}</th>`);
+  html += `</tr></thead><tbody>`;
+  metrics.forEach(m => {
+    const vals = comparedCountries.map(c => m.get(c));
+    const max = Math.max(...vals.filter(v => typeof v === 'number'));
+    html += `<tr><td>${m.label}</td>`;
+    vals.forEach(v => {
+      const isMax = typeof v === 'number' && v === max && m.higherBetter === true;
+      const isMin = typeof v === 'number' && v === Math.min(...vals.filter(x=>typeof x==='number')) && m.higherBetter === false;
+      const bar = typeof v === 'number' && max ? `<div class="cmp-bar"><div class="cmp-bar-fill" style="width:${Math.min(100, v/max*100)}%"></div></div>` : '';
+      html += `<td class="num${isMax||isMin?' best':''}">${m.fmt(v)||'–'}${bar}</td>`;
+    });
+    html += `</tr>`;
+  });
+  html += `</tbody></table>`;
+
+  body.innerHTML = html;
+}
+
+// AI-Beziehungs-Analyse
+async function askAiComparison(predefinedFocus) {
+  if (comparedCountries.length < 2) return;
+  const answer = document.getElementById('cmpAiAnswer');
+  const btn = document.getElementById('cmpAskAi');
+  btn.disabled = true; btn.textContent = '… analysiere';
+  answer.classList.add('show');
+  answer.innerHTML = '<i style="color:var(--ink-dim)">Claude analysiert Beziehungen…</i>';
+
+  const focusMap = {
+    relations: 'Beschreibe die diplomatischen Beziehungen zwischen diesen Ländern. Stärken, Spannungen, aktuelle Stand.',
+    conflicts: 'Welche aktuellen Konflikte, Spannungen oder Streitigkeiten gibt es zwischen diesen Ländern?',
+    trade: 'Wie ist der Handel und die wirtschaftliche Verflechtung zwischen diesen Ländern? Wichtigste Güter, Importe/Exporte.',
+    alliances: 'In welchen Allianzen/Blöcken sind diese Länder zusammen oder getrennt? Wie beeinflusst das ihre Beziehungen?',
+    history: 'Was ist die historische Beziehung dieser Länder zueinander? Wichtige Ereignisse, Kriege, Bündnisse.',
+    risk: 'Welche realistischen Eskalations-Szenarien zwischen diesen Ländern sind für die nächsten 6-12 Monate denkbar?',
+  };
+  const focus = focusMap[predefinedFocus] || 'Analysiere die geopolitischen Beziehungen zwischen diesen Ländern: Allianzen, Konflikte, Handel, Kultur, Trends.';
+
+  const countriesText = comparedCountries.map(c => {
+    const p = c.profile, l = c.live, e = c.economic;
+    const summary = [
+      `${c.name} (${c.iso})`,
+      l?.headOfState && `Staat: ${l.headOfState}`,
+      l?.headOfGovernment && l.headOfGovernment !== l.headOfState && `Reg.: ${l.headOfGovernment}`,
+      l?.govType || p?.govType,
+      p?.alliances?.length && `Allianzen: ${p.alliances.join(', ')}`,
+      e?.gdp && `BIP: ${fmtMoney(e.gdp)}`,
+      p?.context && `Kontext: ${p.context.slice(0, 200)}`
+    ].filter(Boolean).join(' | ');
+    return ' - ' + summary;
+  }).join('\n');
+
+  const sys = `Du bist ein erfahrener geopolitischer Analyst. Analysiere die Beziehungen zwischen mehreren Ländern. Sei präzise, faktenbasiert, mit konkreten Daten/Namen. Strukturiere mit **Fettung** als Zwischenüberschriften. Deutsch, max ~350 Wörter.
+
+LÄNDER:
+${countriesText}`;
+
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/ai`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ system:sys, messages:[{role:'user', content:focus}] })
+    });
+    const data = await res.json();
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim() || '(keine Antwort)';
+    answer.innerHTML = text.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
+  } catch (e) {
+    answer.innerHTML = '<span style="color:var(--conflict)">Fehler: '+e.message+'</span>';
+  }
+  btn.disabled = false; btn.textContent = '⚡ Beziehungs-Analyse via KI';
+}
+document.getElementById('cmpAskAi')?.addEventListener('click', () => askAiComparison());
+document.querySelectorAll('#comparePanel .chip').forEach(c => c.onclick = () => askAiComparison(c.dataset.cq));
+
 /* ════ START ════ */
 buildCategoryUI();
 renderStatic();
@@ -2391,6 +2631,7 @@ loadConflicts();
 conflictTimer = setInterval(loadConflicts, CONFIG.CONFLICT_REFRESH_MS);
 loadSentinelConfig();
 loadPins(); renderPins();
+loadComparedCountries();
 registerSW();
 
 // OSINT-Feed im Hintergrund laden (für KI-Kontext)

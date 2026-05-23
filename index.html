@@ -187,6 +187,40 @@
   </div>
 </div>
 
+<!-- Compare-Basket (floating bottom right) -->
+<div id="compareBasket" class="cmp-basket">
+  <div class="cmp-basket-head">
+    <span>Vergleich (<span id="cmpCount">0</span>)</span>
+    <button id="cmpClearAll" title="Alle entfernen">×</button>
+  </div>
+  <div id="cmpChips"></div>
+  <button id="cmpOpenBtn" class="tb-btn cmp-open" disabled>Vergleichen →</button>
+</div>
+
+<!-- Compare-Panel (full-width slide-in) -->
+<div id="comparePanel">
+  <div class="osint-head">
+    <div>
+      <div class="region">Länder-Vergleich</div>
+      <div class="coords" id="cmpPanelSub">2 Länder</div>
+    </div>
+    <button class="closeBtn" id="closeComparePanel">×</button>
+  </div>
+  <div id="comparePanelBody" class="cmp-body"></div>
+  <div class="ai-foot">
+    <div class="chips">
+      <span class="chip" data-cq="relations">🤝 Diplomatische Beziehungen</span>
+      <span class="chip" data-cq="conflicts">⚔ Aktuelle Konflikte/Spannungen</span>
+      <span class="chip" data-cq="trade">📦 Handel & Wirtschaftsbeziehungen</span>
+      <span class="chip" data-cq="alliances">🛡 Allianzen & Blöcke</span>
+      <span class="chip" data-cq="history">📜 Historische Beziehung</span>
+      <span class="chip" data-cq="risk">⚠ Eskalations-Risiken</span>
+    </div>
+    <button id="cmpAskAi" class="tb-btn" style="width:100%;padding:11px;background:var(--accent);color:#000">⚡ Beziehungs-Analyse via KI</button>
+    <div id="cmpAiAnswer" class="cmp-ai-answer"></div>
+  </div>
+</div>
+
 <div id="briefing">
   <div class="osint-head">
     <div>
