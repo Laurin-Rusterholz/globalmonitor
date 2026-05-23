@@ -5141,11 +5141,10 @@ function formatAnalysisAsMarkdown(data) {
 
 async function runProjectAnalysis(forceWeb = false) {
   if (!activeProject) return;
-  toast('KI analysiert These…');
+  toast('KI analysiert These (3-fach parallel)…');
   const btn = document.getElementById('rerunAnalysis');
   const origBtnText = btn?.textContent;
-  if (btn) { btn.disabled = true; }
-  // Netlify Pro: 26s Sync-Budget, mehr Kontext erlaubt für bessere Analyse
+  if (btn) { btn.disabled = true; btn.textContent = '… KI 3-fach parallel'; }
   const recentEvents = [];
   (conflictStore || []).slice(0, 20).forEach(e => recentEvents.push(`Konflikt: ${e.n}${e.i?' - '+e.i.slice(0,60):''}`));
   (osintStore || []).slice(0, 10).forEach(it => recentEvents.push(`OSINT [${it.source}]: ${it.title}`));
@@ -5153,57 +5152,115 @@ async function runProjectAnalysis(forceWeb = false) {
 
   let data = null;
   let bgErr = null;
-  try {
-    data = await window.runBackgroundJob('projectanalyze', {
-      thesis: activeProject.thesis,
-      baseCountries: activeProject.countries,
-      webSearch: forceWeb,
-      recentEvents
-    }, {
-      maxWaitSec: 45,
-      pollIntervalMs: 2500,
-      onProgress: (i) => {
-        if (btn) btn.textContent = `… KI ${Math.round(i * 2.5)}s`;
-      }
-    });
-  } catch (e) {
-    bgErr = e;
-    console.warn('Background-Analyse fehlgeschlagen:', e.message);
-  }
 
-  // Sync-Fallback IMMER versuchen wenn Background-Resultat fehlt - egal welcher Fehlertyp
-  // (vorher nur bei UNSUPPORTED; bei Timeout 60s blieb der Sync ungenutzt)
-  if (!data || data.error) {
-    if (btn) btn.textContent = '… sync-fallback';
-    toast(bgErr ? `Background: ${bgErr.message.slice(0,60)} – versuche Sync` : 'Sync-Modus');
+  // NEU: 3-fach Split parallel. Jede Section <26s → fits in Sync-Budget.
+  // Wallzeit = max(core, context, questions) ≈ 15-20s statt 30s+ sequenziell.
+  const callSection = async (sectionName) => {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        thesis: activeProject.thesis,
+        baseCountries: activeProject.countries,
+        webSearch: sectionName === 'core' ? forceWeb : false,
+        recentEvents,
+        section: sectionName
+      })
+    });
+    const text = await res.text();
+    let parsed;
+    try { parsed = JSON.parse(text); }
+    catch { throw new Error(`${sectionName}: kein JSON (${res.status}) ${text.slice(0,120)}`); }
+    if (!res.ok || parsed.error) throw new Error(`${sectionName}: ${parsed.error || 'HTTP '+res.status}`);
+    return parsed;
+  };
+
+  const [coreRes, ctxRes, qRes] = await Promise.allSettled([
+    callSection('core'),
+    callSection('context'),
+    callSection('questions'),
+  ]);
+
+  const partial = {};
+  const sectionErrors = [];
+  if (coreRes.status === 'fulfilled') {
+    partial.countries = coreRes.value.countries || [];
+    partial.actors = coreRes.value.actors || [];
+    partial.coreModel = coreRes.value.model;
+    partial.webSearchUsed = coreRes.value.webSearchUsed;
+  } else sectionErrors.push(coreRes.reason?.message || 'core unbekannt');
+  if (ctxRes.status === 'fulfilled') {
+    partial.summary = ctxRes.value.summary || '';
+    partial.thesisStrength = ctxRes.value.thesisStrength || 'medium';
+    partial.contextHints = ctxRes.value.contextHints || [];
+    partial.contextModel = ctxRes.value.model;
+  } else sectionErrors.push(ctxRes.reason?.message || 'context unbekannt');
+  if (qRes.status === 'fulfilled') {
+    partial.openQuestions = qRes.value.openQuestions || [];
+    partial.questionsModel = qRes.value.model;
+  } else sectionErrors.push(qRes.reason?.message || 'questions unbekannt');
+
+  // Mind. core ODER context muss klappen, sonst Fallback auf Background/Sync-Full
+  if (partial.countries || partial.summary) {
+    partial.generated = new Date().toISOString();
+    partial.model = [partial.coreModel, partial.contextModel, partial.questionsModel].filter(Boolean).join(' + ') || 'split';
+    partial.splitMode = true;
+    if (sectionErrors.length) partial.partialErrors = sectionErrors;
+    data = partial;
+    if (sectionErrors.length) {
+      toast(`Analyse teilweise fertig (${3-sectionErrors.length}/3 Sections)`);
+    }
+  } else {
+    // Alle 3 Split-Calls gescheitert → Background-Function als letzter Ausweg
+    bgErr = new Error('Split fehlgeschlagen: ' + sectionErrors.join(' | '));
+    console.warn('Split-Analyse komplett gescheitert:', sectionErrors);
+    if (btn) btn.textContent = '… Background-Fallback';
+    toast('3-fach-Split failed, versuche Background-Job…');
     try {
-      const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          thesis: activeProject.thesis,
-          baseCountries: activeProject.countries,
-          webSearch: false, // Sync nutzt nie web_search (zu langsam für 26s-Limit)
-          recentEvents
-        })
+      data = await window.runBackgroundJob('projectanalyze', {
+        thesis: activeProject.thesis,
+        baseCountries: activeProject.countries,
+        webSearch: forceWeb,
+        recentEvents
+      }, {
+        maxWaitSec: 60,
+        pollIntervalMs: 3000,
+        onProgress: (i) => {
+          if (btn) btn.textContent = `… Background ${Math.round(i * 3)}s`;
+        }
       });
-      const text = await res.text();
-      let parsed;
-      try { parsed = JSON.parse(text); }
-      catch { parsed = { error: 'kein JSON in Response: ' + text.slice(0,200) }; }
-      if (!res.ok || parsed.error) {
-        const errMsg = parsed.error || `HTTP ${res.status}`;
-        toast('KI-Analyse fehlgeschlagen: ' + errMsg);
-        // Persistente Fehler-Box im Overview-Tab (Toast verschwindet zu schnell)
-        showProjectAnalysisError(errMsg, parsed, bgErr);
+    } catch (e2) {
+      bgErr = e2;
+      // Letzter Versuch: Full-Sync (kein Web-Search, kleinerer Prompt)
+      if (btn) btn.textContent = '… sync-full fallback';
+      try {
+        const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            thesis: activeProject.thesis,
+            baseCountries: activeProject.countries,
+            webSearch: false,
+            recentEvents,
+            section: 'full'
+          })
+        });
+        const text = await res.text();
+        let parsed;
+        try { parsed = JSON.parse(text); }
+        catch { parsed = { error: 'kein JSON in Response: ' + text.slice(0,200) }; }
+        if (!res.ok || parsed.error) {
+          const errMsg = parsed.error || `HTTP ${res.status}`;
+          toast('KI-Analyse fehlgeschlagen: ' + errMsg);
+          showProjectAnalysisError(errMsg + '\n\nSplit-Fehler:\n' + sectionErrors.join('\n'), parsed, bgErr);
+          if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Aktualisieren'; }
+          return;
+        }
+        data = parsed;
+      } catch (syncErr) {
+        toast('Sync-Fehler: ' + syncErr.message);
+        showProjectAnalysisError(syncErr.message + '\n\nSplit-Fehler:\n' + sectionErrors.join('\n'), null, bgErr);
         if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Aktualisieren'; }
         return;
       }
-      data = parsed;
-    } catch (syncErr) {
-      toast('Sync-Fehler: ' + syncErr.message);
-      showProjectAnalysisError(syncErr.message, null, bgErr);
-      if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Aktualisieren'; }
-      return;
     }
   }
   // Erfolg → alte Fehler-Box wegräumen
@@ -5230,7 +5287,7 @@ async function runProjectAnalysis(forceWeb = false) {
       type: 'finding',
       title: `🤖 KI-Analyse vom ${dateLabel}`,
       content: formatAnalysisAsMarkdown(data),
-      source: `KI-Modell: ${data.model || '?'}${data.fallbackUsed ? ' · Fallback: ' + data.fallbackUsed : ''}${data.webSearchUsed ? ' · mit Web-Suche' : ''}`,
+      source: `KI-Modell: ${data.model || '?'}${data.splitMode ? ' · 3-fach parallel' : ''}${data.fallbackUsed ? ' · Fallback: ' + data.fallbackUsed : ''}${data.webSearchUsed ? ' · mit Web-Suche' : ''}${data.partialErrors?.length ? ' · ⚠ ' + data.partialErrors.length + ' Section-Fehler' : ''}`,
       tags: ['ki-analyse', 'auto', forceWeb ? 'web-suche' : 'offline'],
       isAnalysis: true,
       analysisRaw: data, // Original-JSON für späteren Re-Render
