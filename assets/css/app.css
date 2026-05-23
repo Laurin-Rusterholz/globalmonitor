@@ -531,6 +531,60 @@ select.tb-btn{appearance:none;padding-right:24px;background-image:linear-gradien
   transition:transform .28s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;
   box-shadow:-20px 0 50px rgba(0,0,0,.65)}
 #projectPanel.open{transform:translateX(0)}
+
+/* ════ PROJECT FULLSCREEN MODE ════
+   Wenn Projekt aktiv: Sidebar/Topbar treten zurück,
+   Projekt-Panel wird permanent links, Map gefüllt. */
+body.project-mode #sidebar{display:none}
+body.project-mode #app{grid-template-columns:1fr}
+body.project-mode #topbar{
+  top:auto; bottom:14px; left:50%; transform:translateX(-50%);
+  background:rgba(15,20,29,.97); border:1px solid var(--protest);
+}
+body.project-mode #projectPanel{
+  position:absolute; top:0; left:0; right:auto;
+  width:560px; max-width:40vw;
+  border-left:none; border-right:2px solid var(--protest);
+  transform:translateX(0);
+  box-shadow:20px 0 50px rgba(0,0,0,.65);
+}
+body.project-mode #projectPanel .osint-head::after{background:radial-gradient(circle,rgba(255,200,61,.32),transparent 70%)}
+body.project-mode #map{margin-left:0}
+body.project-mode .proj-mode-indicator{
+  position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1300;
+  background:linear-gradient(90deg,rgba(255,200,61,.95),rgba(255,200,61,.85));color:#000;
+  padding:7px 16px;border-radius:24px;font-size:11px;font-weight:600;
+  display:flex;align-items:center;gap:12px;box-shadow:0 6px 20px rgba(0,0,0,.5);letter-spacing:.03em
+}
+body.project-mode .proj-mode-indicator button{
+  background:#000;color:var(--protest);border:none;border-radius:14px;
+  padding:4px 11px;cursor:pointer;font-family:inherit;font-size:10.5px;font-weight:600
+}
+body.project-mode .proj-mode-indicator button:hover{background:#222}
+body:not(.project-mode) .proj-mode-indicator{display:none}
+
+/* Project-Note-Marker auf Karte */
+.proj-note-marker{
+  background:var(--protest);color:#000;border-radius:50%;width:28px;height:28px;
+  display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:13px;
+  box-shadow:0 4px 12px rgba(0,0,0,.4),0 0 0 3px rgba(255,200,61,.4);
+  cursor:pointer;font-family:var(--font-display)
+}
+.proj-note-popup .leaflet-popup-content-wrapper{
+  background:var(--panel);border:2px solid var(--protest);
+}
+.proj-note-popup .leaflet-popup-content{margin:11px 13px;font-size:11.5px;max-width:280px}
+.proj-note-popup .pnp-head{display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.proj-note-popup .pnp-flag{font-size:18px}
+.proj-note-popup .pnp-name{font-family:var(--font-display);font-size:13px;color:var(--protest)}
+.proj-note-popup .pnp-note{padding:6px 0;border-top:1px solid var(--line);font-size:11px;color:var(--ink)}
+.proj-note-popup .pnp-note:first-of-type{border-top:none}
+.proj-note-popup .pnp-note-title{font-weight:600;color:var(--ink)}
+.proj-note-popup .pnp-note-content{color:var(--ink-dim);line-height:1.5;margin-top:3px;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.proj-note-popup .pnp-btn{display:inline-block;margin-top:7px;padding:4px 10px;
+  background:var(--protest);color:#000;border-radius:5px;cursor:pointer;font-size:10.5px;font-weight:600}
 #projectPanel .osint-head::after{background:radial-gradient(circle,rgba(255,200,61,.22),transparent 70%)}
 .project-tabs{display:flex;padding:0 16px;border-bottom:1px solid var(--line);background:var(--panel)}
 .project-tab{background:none;border:none;color:var(--ink-dim);padding:10px 14px;cursor:pointer;

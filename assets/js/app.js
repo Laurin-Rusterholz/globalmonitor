@@ -3942,18 +3942,80 @@ document.getElementById('newProjCreate')?.addEventListener('click', async () => 
   btn.disabled = false; btn.textContent = '🚀 Projekt erstellen & KI-Analyse starten';
 });
 
+// Projekt-Notiz-Marker auf Karte (Layer-Group)
+let projectNoteMarkers = L.layerGroup();
+
 async function loadProject(id) {
   try {
     const r = await fetch(`${CONFIG.BACKEND_BASE}/projects?id=${encodeURIComponent(id)}`);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     activeProject = await r.json();
+    // Andere Panels schliessen damit Fokus aufs Projekt liegt
+    SIDE_PANELS.forEach(p => { if (p !== 'projectPanel') document.getElementById(p)?.classList.remove('open'); });
+    // Fullscreen-Modus aktivieren
+    enterProjectMode();
     openProjectPanel();
     if (activeProject.view) {
       try { map.setView(activeProject.view.center, activeProject.view.zoom); } catch {}
     }
     applyProjectHighlights();
+    renderProjectNoteMarkers();
+    // Map muss neu vermessen werden (Sidebar weg, neue Dimensionen)
+    setTimeout(() => map.invalidateSize(), 100);
   } catch (e) { toast('Projekt-Lade-Fehler: ' + e.message); }
 }
+
+function enterProjectMode() {
+  document.body.classList.add('project-mode');
+  document.getElementById('projModeName').textContent = activeProject?.name || 'Projekt';
+}
+
+function exitProjectMode() {
+  document.body.classList.remove('project-mode');
+  // Map ohne Verzug refreshen
+  setTimeout(() => map.invalidateSize(), 100);
+}
+
+function renderProjectNoteMarkers() {
+  projectNoteMarkers.clearLayers();
+  if (!activeProject?.countryNotes) return;
+  if (!map.hasLayer(projectNoteMarkers)) map.addLayer(projectNoteMarkers);
+  Object.entries(activeProject.countryNotes).forEach(([iso, notes]) => {
+    if (!notes?.length) return;
+    const coords = R?.countryCenters?.[iso];
+    if (!coords) return;
+    const flag = flagEmoji(iso);
+    const cName = window.getCountryProfile?.(iso)?.name || iso;
+    const icon = L.divIcon({
+      className: '',
+      html: `<div class="proj-note-marker">${notes.length}</div>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14]
+    });
+    const marker = L.marker(coords, { icon });
+    const notesHtml = notes.slice(0, 4).map(n => `
+      <div class="pnp-note">
+        <div class="pnp-note-title">${escapeHtml(n.title || 'Notiz')}</div>
+        <div class="pnp-note-content">${escapeHtml(n.content || '')}</div>
+      </div>
+    `).join('');
+    marker.bindPopup(`
+      <div class="pnp-head">
+        <span class="pnp-flag">${flag}</span>
+        <span class="pnp-name">${escapeHtml(cName)}</span>
+        <span style="color:var(--ink-faint);font-size:10px">${notes.length} Notiz${notes.length>1?'en':''}</span>
+      </div>
+      ${notesHtml}
+      ${notes.length > 4 ? `<div style="font-size:10px;color:var(--ink-faint);margin-top:4px">+${notes.length-4} weitere im Notizen-Tab</div>` : ''}
+      <span class="pnp-btn" onclick="window._projOpenNote('${iso}','${cName.replace(/'/g,"\\'")}')">＋ Neue Notiz</span>
+    `, { className: 'proj-note-popup' });
+    projectNoteMarkers.addLayer(marker);
+  });
+}
+window._projOpenNote = (iso, name) => {
+  map.closePopup();
+  openProjectNoteModal(iso, name);
+};
 
 async function saveProject(patch = {}) {
   if (!activeProject) return;
@@ -4263,6 +4325,7 @@ document.getElementById('projNoteSave')?.addEventListener('click', async () => {
 
   document.getElementById('projectNoteModal').classList.remove('open');
   toast('Notiz gespeichert');
+  renderProjectNoteMarkers(); // Marker auf Karte aktualisieren
   if (document.querySelector('.project-tab.active')?.dataset.ptab === 'countries') renderProjectTab('countries');
   if (document.querySelector('.project-tab.active')?.dataset.ptab === 'notes') renderProjectTab('notes');
 });
@@ -4316,11 +4379,15 @@ function closeProject() {
     try { layer.setStyle({weight: 0.6, color:'#0c1117', fillColor: countryColor(iso,'political'), fillOpacity:0.5}); } catch {}
   });
   projectHighlights.clear();
+  // Notiz-Marker entfernen
+  if (projectNoteMarkers) projectNoteMarkers.clearLayers();
   activeProject = null;
   document.getElementById('projectPanel').classList.remove('open');
-  document.getElementById('projStatusBanner').classList.remove('show');
+  document.getElementById('projStatusBanner')?.classList.remove('show');
+  exitProjectMode();
   toast('Projekt geschlossen - Notizen bleiben im Länderprofil');
 }
+document.getElementById('projModeExit')?.addEventListener('click', closeProject);
 
 // In Research-Manager auch Projekte listen
 async function loadAllProjects() {
