@@ -3737,24 +3737,100 @@ function openNewProjectModal(presetThesis = '', presetCountries = []) {
 }
 
 // AI-Länder-Vorschlag aus Projekttitel + These
+// Regel-basierter Country-Vorschlag aus Text - funktioniert OHNE KI sofort
+function ruleBasedSuggest(text) {
+  const lower = text.toLowerCase();
+  const found = new Set();
+
+  // 1. Direkte Ländernamen aus countries.js suchen
+  Object.entries(window.COUNTRIES || {}).forEach(([iso, p]) => {
+    const nameLower = (p.name || '').toLowerCase();
+    if (nameLower && lower.includes(nameLower)) found.add(iso);
+    // Auch nach Hauptstadt suchen
+    const capLower = (p.capital || '').toLowerCase().split(/[\s(,]/)[0];
+    if (capLower && capLower.length > 4 && lower.includes(capLower)) found.add(iso);
+  });
+
+  // 2. Organisations-Stichwörter → Mitgliedstaaten
+  const orgKeywords = {
+    'eu ': 'EU', 'europ.union': 'EU', 'europäische union': 'EU',
+    'nato': 'NATO', 'atlantik': 'NATO',
+    'brics': 'BRICS+',
+    'asean': 'ASEAN',
+    'gcc': 'GCC', 'golf': 'GCC',
+    'csto': 'CSTO',
+    'sco': 'SCO', 'shanghai': 'SCO',
+    'opec': 'OPEC',
+    'g7': 'G7', 'g-7': 'G7',
+    'g20': 'G20', 'g-20': 'G20',
+    'au ': 'AU', 'afrikanische union': 'AU',
+    'ecowas': 'ECOWAS', 'sahel': 'AES',
+    'mercosur': 'Mercosur',
+    'arab.liga': 'AL', 'arabische': 'AL',
+    'aukus': 'AUKUS', 'quad': 'QUAD',
+  };
+  Object.entries(orgKeywords).forEach(([kw, orgKey]) => {
+    if (lower.includes(kw)) {
+      const org = window.ORGS?.[orgKey];
+      (org?.memberIsos || []).forEach(iso => found.add(iso));
+    }
+  });
+
+  // 3. Thematische Keywords → typische Länder
+  const themes = {
+    'sanktionen russland': ['RU','US','GB','DE','FR','EU','CN','IN','TR','AE','HU','BY'],
+    'ukraine': ['UA','RU','US','DE','PL','GB','BY','MD','RO'],
+    'gaza': ['IL','PS','EG','JO','IR','LB','SY','QA','US'],
+    'iran': ['IR','US','IL','SA','TR','RU','CN'],
+    'taiwan': ['TW','CN','US','JP','KR'],
+    'klima': ['CN','US','IN','RU','BR','ID','DE','FR'],
+    'arktis': ['RU','US','CA','NO','DK','IS','FI','SE'],
+    'sahel': ['ML','BF','NE','TD','MR','SD','FR','RU'],
+    'china': ['CN','TW','US','JP','KR','IN','PH','VN','AU'],
+    'cyberangriff': ['US','RU','CN','IR','KP','GB','UA'],
+    'migration': ['DE','FR','IT','GR','TR','LY','TN','SY','AF'],
+    'energie': ['RU','SA','US','CN','DE','QA','NO','IR','VE'],
+    'rüstung': ['US','RU','CN','FR','DE','IL','TR','KR','JP'],
+  };
+  Object.entries(themes).forEach(([kw, isos]) => {
+    if (lower.includes(kw)) isos.forEach(iso => found.add(iso));
+  });
+
+  return [...found];
+}
+
 async function suggestProjectCountries() {
   const name = document.getElementById('newProjName').value.trim();
   const thesis = document.getElementById('newProjThesis').value.trim();
   const combined = `${name}. ${thesis}`.trim();
   if (combined.length < 15) return toast('Mehr Titel/These eingeben');
 
-  const btn = document.getElementById('suggestCountriesBtn');
+  // SOFORT: Regel-basierter Vorschlag (kein API-Call)
+  const ruleHits = ruleBasedSuggest(combined);
   const preview = document.getElementById('suggestPreview');
-  btn.disabled = true; const orig = btn.textContent; btn.textContent = '… analysiere';
   preview.style.display = 'block';
-  preview.innerHTML = '<i>Claude analysiert These und sucht beteiligte Länder…</i>';
+
+  if (ruleHits.length) {
+    const previewHtml = ruleHits.slice(0,20).map(iso => {
+      const cName = window.getCountryProfile?.(iso)?.name || iso;
+      return `<span>${flagEmoji(iso)} ${escapeHtml(cName)}</span>`;
+    }).join(' · ');
+    preview.innerHTML = `<b style="color:var(--choke)">⚡ Sofort-Vorschlag (Regel-basiert, ${ruleHits.length} Länder):</b><br>${previewHtml}<br><i style="color:var(--ink-faint);font-size:10px">KI verfeinert in Hintergrund…</i>`;
+    document.getElementById('newProjCountries').value = ruleHits.join(', ');
+  } else {
+    preview.innerHTML = '<i style="color:var(--ink-faint)">Keine Stichwort-Treffer - KI analysiert…</i>';
+  }
+
+  // KI im Hintergrund versuchen - falls erfolgreich, ersetzt sie die Regel-Vorschläge
+  const btn = document.getElementById('suggestCountriesBtn');
+  const origBtn = btn.textContent;
+  btn.disabled = true; btn.textContent = '… KI verfeinert';
 
   try {
     const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ thesis: combined, baseCountries: [], webSearch: false })
+      body: JSON.stringify({ thesis: combined, baseCountries: ruleHits, webSearch: false })
     });
-    // Body immer lesen, auch bei Fehler
     const text = await res.text();
     let data;
     try { data = JSON.parse(text); } catch { data = { error: 'Server lieferte kein JSON', raw: text.slice(0, 300) }; }
@@ -3763,23 +3839,25 @@ async function suggestProjectCountries() {
       console.error('projectanalyze HTTP ' + res.status, data);
       const detail = data.error || `HTTP ${res.status}`;
       let hint = '';
-      if (text.includes('credit') || text.includes('balance') || res.status === 402) hint = ' → Anthropic-Guthaben aufgebraucht. Lade in console.anthropic.com nach.';
-      else if (res.status === 401) hint = ' → API-Key ungültig in Netlify-ENV.';
-      else if (res.status === 429) hint = ' → Rate Limit, warte 60 Sek.';
-      else if (res.status === 504 || detail.includes('Timeout') || detail.includes('aborted')) hint = ' → KI-Antwort zu langsam (Netlify-10s-Limit).';
-      else if (detail.includes('JSON')) hint = ' → KI-Antwort nicht parsebar - bitte nochmal.';
-      preview.innerHTML = `<span style="color:var(--conflict)"><b>Fehler:</b> ${escapeHtml(detail)}${hint}</span><br><small style="color:var(--ink-faint)">${escapeHtml((data.raw||'').slice(0,200))}</small>`;
-      btn.disabled = false; btn.textContent = orig;
+      if (text.includes('credit') || text.includes('balance') || res.status === 402) hint = ' → Anthropic-Guthaben prüfen';
+      else if (res.status === 401) hint = ' → API-Key ungültig';
+      else if (res.status === 429) hint = ' → Rate Limit';
+      else if (res.status === 504 || detail.includes('Timeout') || detail.includes('aborted')) hint = ' → KI zu langsam';
+      // Bei KI-Fehler: Regel-Vorschläge stehen lassen
+      if (ruleHits.length) {
+        preview.innerHTML += `<br><small style="color:var(--ink-faint);font-size:10px">⚠ KI-Verfeinerung fehlgeschlagen: ${escapeHtml(detail)}${hint} - Regel-Vorschläge oben bleiben.</small>`;
+      } else {
+        preview.innerHTML = `<span style="color:var(--conflict)">Fehler: ${escapeHtml(detail)}${hint}</span>`;
+      }
+      btn.disabled = false; btn.textContent = origBtn;
       return;
     }
 
     const countries = (data.countries || []).filter(c => c.iso);
-    if (!countries.length) {
-      preview.innerHTML = '<span style="color:var(--ink-faint)">Keine Länder erkannt - bitte manuell eingeben.</span>';
-    } else {
+    if (countries.length) {
       const isos = countries.map(c => c.iso);
       document.getElementById('newProjCountries').value = isos.join(', ');
-      preview.innerHTML = `<b style="color:var(--protest)">${countries.length} vorgeschlagen (${data.model||'?'}):</b><br>` +
+      preview.innerHTML = `<b style="color:var(--protest)">🤖 KI-Vorschlag (${countries.length} Länder, ${data.model||'?'}):</b><br>` +
         countries.slice(0,15).map(c => {
           const cName = window.getCountryProfile?.(c.iso)?.name || c.iso;
           return `<span title="${escapeHtml(c.reason||'')}">${flagEmoji(c.iso)} ${escapeHtml(cName)} <small style="opacity:.7">(${c.role||'?'})</small></span>`;
@@ -3788,9 +3866,13 @@ async function suggestProjectCountries() {
     }
   } catch (e) {
     console.error('projectanalyze network', e);
-    preview.innerHTML = `<span style="color:var(--conflict)"><b>Netzwerkfehler:</b> ${escapeHtml(e.message)}</span>`;
+    if (ruleHits.length) {
+      preview.innerHTML += `<br><small style="color:var(--ink-faint);font-size:10px">⚠ KI nicht erreichbar (${escapeHtml(e.message)}) - Regel-Vorschläge stehen.</small>`;
+    } else {
+      preview.innerHTML = `<span style="color:var(--conflict)">Netzwerkfehler: ${escapeHtml(e.message)}</span>`;
+    }
   }
-  btn.disabled = false; btn.textContent = orig;
+  btn.disabled = false; btn.textContent = origBtn;
 }
 
 document.getElementById('suggestCountriesBtn')?.addEventListener('click', suggestProjectCountries);
