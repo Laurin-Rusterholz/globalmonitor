@@ -50,15 +50,27 @@ ${baseCountries.length ? `Basis: ${baseCountries.join(',')}` : ''}${eventsHint}
 
 JSON liefern.`;
 
-    const primary = webSearch ? PRIMARY_SONNET : PRIMARY_HAIKU;
-    const modelChain = [primary, ...FALLBACK_MODELS];
-    // Pro Versuch ~7.5s Abort, damit auch auf Netlify Free (10s Limit) noch eine Antwort möglich
-    // Auf Pro/Pro+ (26s) reicht das für 2-3 Versuche
-    const perAttemptAbortMs = 7500;
+    // WICHTIG: Netlify Free killt Functions nach 10s hart. Wenn wir eine Chain
+    // mit mehreren 7.5s-Abort-Versuchen durchspielen, killt Netlify die Function
+    // OHNE Response-Body → Client sieht 500 ohne Diagnose. Daher Strategie:
+    //
+    // 1) NUR EIN VERSUCH mit dem schnellsten Modell (Haiku), 8s Abort
+    // 2) Modell-Fallback NUR bei FAST-Errors (400/404 mit "model unknown"),
+    //    weil die kommen instant zurück - dann hat man noch Zeit für Retry
+    // 3) Bei AbortError (Modell zu langsam): SOFORT raus mit Timeout-Fehler,
+    //    KEIN nächster Versuch (würde Netlify-Kill provozieren)
+    //
+    // webSearch wird im Sync-Modus IGNORIERT (zu langsam für 10s-Limit).
+    // Wenn User Web-Suche will: muss Background-Function nutzen (Blobs erforderlich).
+    const primary = PRIMARY_HAIKU; // immer Haiku im Sync, Speed > Tiefe
+    const fastFallback = ['claude-haiku-4-5', 'claude-3-5-haiku-latest']; // Fast-fail-Chain bei Modell-unbekannt
 
-    let lastErr = null;
+    const modelChain = [primary, ...fastFallback];
+    const perAttemptAbortMs = 8500;
+
     let lastStatus = null;
     let lastErrBody = '';
+    let usedFallback = false;
 
     for (let i = 0; i < modelChain.length; i++) {
       const modelName = modelChain[i];
@@ -68,10 +80,6 @@ JSON liefern.`;
         system: sys,
         messages: [{ role: 'user', content: userMsg }],
       };
-      if (webSearch && i === 0) {
-        // Web-Search nur beim ersten Versuch (kostet/dauert mehr)
-        reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }];
-      }
 
       const ctrl = new AbortController();
       const tHandle = setTimeout(() => ctrl.abort(), perAttemptAbortMs);
@@ -89,12 +97,14 @@ JSON liefern.`;
         });
       } catch (e) {
         clearTimeout(tHandle);
-        lastErr = e;
         if (e.name === 'AbortError') {
-          lastErrBody = `Timeout nach ${perAttemptAbortMs/1000}s (Modell ${modelName})`;
-          continue; // nächstes Modell probieren
+          // KEIN Retry! Hier ist die Function in <2s vor Netlify-Kill.
+          return json({
+            error: `KI-Anfrage zu langsam (Abort nach ${perAttemptAbortMs/1000}s, Modell ${modelName}). These verkürzen oder Background-Modus (Blobs) aktivieren.`,
+            timeout: true,
+            model: modelName,
+          }, 500);
         }
-        // Netzwerkfehler → sofort raus, kein Retry
         return json({ error: 'Netzwerk-Fehler: ' + e.message, model: modelName }, 500);
       } finally { clearTimeout(tHandle); }
 
@@ -102,58 +112,38 @@ JSON liefern.`;
         const errBody = await apiRes.text().catch(() => '');
         lastStatus = apiRes.status;
         lastErrBody = errBody.slice(0, 400);
-        // 401/402/429 → kein Retry, das wird mit anderen Modellen auch fehlschlagen
-        if (apiRes.status === 401) {
-          return json({ error: `API-Key ungültig (401): ${lastErrBody}`, apiStatus: 401 }, 500);
-        }
-        if (apiRes.status === 402 || errBody.includes('credit') || errBody.includes('balance')) {
-          return json({ error: `Anthropic-Guthaben aufgebraucht (402): ${lastErrBody}`, apiStatus: 402 }, 500);
-        }
-        if (apiRes.status === 429) {
-          return json({ error: `Rate Limit erreicht (429): ${lastErrBody}`, apiStatus: 429 }, 500);
-        }
-        // 400/404 mit "model" → Modell unbekannt → nächstes probieren
+        if (apiRes.status === 401) return json({ error: `API-Key ungültig (401): ${lastErrBody}`, apiStatus: 401 }, 500);
+        if (apiRes.status === 402 || /credit|balance/i.test(errBody)) return json({ error: `Anthropic-Guthaben aufgebraucht (402): ${lastErrBody}`, apiStatus: 402 }, 500);
+        if (apiRes.status === 429) return json({ error: `Rate Limit (429): ${lastErrBody}`, apiStatus: 429 }, 500);
+        // Modell unbekannt: fast (kein Abort konsumiert) → nächstes Modell darf
         if ((apiRes.status === 400 || apiRes.status === 404) && /model/i.test(errBody)) {
-          console.warn(`Modell ${modelName} abgelehnt, versuche nächstes…`, errBody.slice(0,120));
+          console.warn(`Modell ${modelName} abgelehnt, fast-fallback…`);
+          usedFallback = true;
           continue;
         }
-        // 5xx von Anthropic → nächstes Modell oder Retry
-        if (apiRes.status >= 500) {
-          console.warn(`Anthropic ${apiRes.status} bei ${modelName}, nächster Versuch…`);
-          continue;
-        }
-        // Anderer Fehler → sofort raus
-        return json({ error: `API HTTP ${apiRes.status} (${modelName}) - ${lastErrBody}`, apiStatus: apiRes.status, model: modelName }, 500);
+        return json({ error: `API HTTP ${apiRes.status} (${modelName}): ${lastErrBody}`, apiStatus: apiRes.status, model: modelName }, 500);
       }
 
-      // Success-Pfad
+      // Success
       const data = await apiRes.json();
       const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-      if (!text) {
-        lastErrBody = `Leere KI-Antwort (Modell ${modelName})`;
-        continue;
-      }
+      if (!text) return json({ error: `Leere KI-Antwort (${modelName})`, model: modelName }, 500);
 
       const m = text.match(/\{[\s\S]*\}/);
-      if (!m) {
-        return json({ error: 'Kein JSON in Antwort: ' + text.slice(0,200), model: modelName }, 500);
-      }
+      if (!m) return json({ error: 'Kein JSON in Antwort: ' + text.slice(0,200), model: modelName }, 500);
       let parsed;
       try { parsed = JSON.parse(m[0]); }
-      catch (e) {
-        return json({ error: 'JSON-Parse-Fehler: ' + e.message, raw: text.slice(0,300), model: modelName }, 500);
-      }
+      catch (e) { return json({ error: 'JSON-Parse-Fehler: ' + e.message, raw: text.slice(0,300), model: modelName }, 500); }
 
       parsed.generated = new Date().toISOString();
       parsed.model = modelName;
-      parsed.webSearchUsed = !!webSearch && i === 0;
-      if (i > 0) parsed.fallbackUsed = `${primary} → ${modelName}`;
+      parsed.webSearchUsed = false; // sync hat nie web_search
+      if (usedFallback) parsed.fallbackUsed = `${primary} → ${modelName}`;
       return json(parsed);
     }
 
-    // Alle Modelle fehlgeschlagen
     return json({
-      error: `Alle Modelle (${modelChain.join(', ')}) fehlgeschlagen. Letzter Fehler: ${lastErrBody || lastErr?.message || 'unbekannt'}`,
+      error: `Alle Modelle (${modelChain.join(', ')}) abgelehnt: ${lastErrBody}`,
       apiStatus: lastStatus,
       modelsAttempted: modelChain,
     }, 500);
