@@ -1,0 +1,781 @@
+/* ════════════════════════════════════════════════════════════════
+   GLOBAL MONITOR · APP
+   ────────────────────────────────────────────────────────────────
+   Erfordert: Leaflet + reference.js (window.REF)
+   Architektur:
+   • Layer-Manager mit Kategorien
+   • Live-Backends via Netlify Functions
+   • KI-Regionsanalyse mit vollständigem Kontext
+   • Länderinfo-Overlay (World Bank live)
+   ════════════════════════════════════════════════════════════════ */
+
+const CONFIG = {
+  USE_BACKEND: true,
+  BACKEND_BASE: '/.netlify/functions',
+  PLANE_REFRESH_MS: 20000,
+  SHIP_REFRESH_MS: 60000,
+  CONFLICT_REFRESH_MS: 10 * 60 * 1000,
+};
+
+const R = window.REF;
+
+/* ════ MAP INIT ════ */
+const map = L.map('map', {zoomControl:true, worldCopyJump:true, minZoom:2, maxZoom:18}).setView([28, 25], 3);
+const bases = {
+  dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    {attribution:'© OSM, © CARTO', subdomains:'abcd', maxZoom:19}),
+  sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    {attribution:'© Esri, Maxar, Earthstar', maxZoom:19}),
+  terrain: L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    {attribution:'© OSM, © CARTO', subdomains:'abcd', maxZoom:19}),
+  topo: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    {attribution:'© OpenTopoMap', subdomains:'abc', maxZoom:17}),
+};
+let activeBase = bases.dark.addTo(map);
+document.querySelectorAll('.basemap-btn').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('.basemap-btn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    map.removeLayer(activeBase);
+    activeBase = bases[b.dataset.base].addTo(map);
+    activeBase.bringToBack && activeBase.bringToBack();
+  };
+});
+
+/* ════ LAYER DEFINITIONEN ════
+   Kategorien: events, energy, maritime, military, infra, economy, environment, air
+*/
+const LAYERS = {
+  // Ereignisse
+  conflict:    {n:'Bewaffnete Konflikte', c:'#ff4d3d', cat:'events', on:true},
+  battle:      {n:'Gefechte / Offensiven', c:'#ff7847', cat:'events', on:true},
+  protest:     {n:'Proteste & Unruhen',   c:'#ffc83d', cat:'events', on:true},
+  action:      {n:'Aktuelle Militäraktionen', c:'#ff4d3d', cat:'events', on:true},
+  quake:       {n:'Erdbeben (M4.5+)',     c:'#ff4d3d', cat:'events', on:false},
+  disaster:    {n:'Naturkatastrophen',    c:'#ff7847', cat:'events', on:false},
+  // Energie
+  pipeOil:     {n:'Ölpipelines',         c:'#c77dff', cat:'energy', on:true, line:true},
+  pipeGas:     {n:'Gaspipelines',        c:'#7a5cff', cat:'energy', on:true, line:true},
+  nuclear:     {n:'Atomkraftwerke',      c:'#ffe14d', cat:'energy', on:true},
+  resOil:      {n:'Ölfelder',            c:'#c77dff', cat:'energy', on:false},
+  resGas:      {n:'Gasfelder',           c:'#7a5cff', cat:'energy', on:false},
+  // Rohstoffe
+  resLi:       {n:'Lithium',             c:'#3ecf8e', cat:'resources', on:false},
+  resRee:      {n:'Seltene Erden',       c:'#ff9d3d', cat:'resources', on:false},
+  resCu:       {n:'Kupfer / Kobalt',     c:'#ffa83d', cat:'resources', on:false},
+  resU:        {n:'Uran',                c:'#ffe14d', cat:'resources', on:false},
+  resFe:       {n:'Eisenerz',            c:'#7e8b9d', cat:'resources', on:false},
+  // See & Handel
+  routes:      {n:'Seehandelsrouten',    c:'#21c7d6', cat:'maritime', on:true, line:true},
+  brirail:     {n:'BRI-Bahnkorridore',   c:'#ff9d3d', cat:'maritime', on:false, line:true},
+  cables:      {n:'Internet-Seekabel',   c:'#5b9bff', cat:'maritime', on:false, line:true, dash:true},
+  choke:       {n:'Chokepoints',         c:'#3ecf8e', cat:'maritime', on:true},
+  ports:       {n:'Strategische Häfen',  c:'#5b9bff', cat:'maritime', on:true},
+  ships:       {n:'Schiffe (Live/Demo)', c:'#5b9bff', cat:'maritime', on:false},
+  shipsMil:    {n:'Militärschiffe',      c:'#ff5da2', cat:'maritime', on:false},
+  // Militär
+  bases:       {n:'Militärbasen',        c:'#ff5da2', cat:'military', on:false},
+  navalBases:  {n:'Militärhäfen',        c:'#ff5da2', cat:'military', on:false},
+  airBases:    {n:'Luftwaffenstützpunkte', c:'#ff7847', cat:'military', on:false},
+  exercises:   {n:'Militärübungen',      c:'#ff5cf2', cat:'military', on:false},
+  launchSites: {n:'Raketen/Raumfahrt',   c:'#ff5cf2', cat:'military', on:false},
+  // Politik & Wirtschaft
+  sanctions:   {n:'Sanktionierte Staaten', c:'#ff5da2', cat:'politics', on:true},
+  bri:         {n:'BRI-Projekte',        c:'#ffa83d', cat:'politics', on:false},
+  // Luft
+  planes:      {n:'Flugzeuge (Live)',    c:'#9fb3c8', cat:'air', on:false},
+};
+
+// LayerGroups initialisieren
+Object.values(LAYERS).forEach(l => { l.group = L.layerGroup(); if (l.on) l.group.addTo(map); });
+
+/* ════ KATEGORIEN-UI ════ */
+const CATEGORIES = [
+  {id:'events',    n:'Ereignisse',         ic:'⚠', open:true},
+  {id:'energy',    n:'Energie & Atom',     ic:'⚛', open:true},
+  {id:'resources', n:'Rohstoffe',          ic:'⛏', open:false},
+  {id:'maritime',  n:'See & Handel',       ic:'⚓', open:true},
+  {id:'military',  n:'Militär',            ic:'🛡', open:false},
+  {id:'politics',  n:'Politik & Wirtschaft', ic:'⚖', open:true},
+  {id:'air',       n:'Luftraum',           ic:'✈', open:false},
+];
+
+function buildCategoryUI() {
+  const c = document.getElementById('categories');
+  c.innerHTML = '';
+  CATEGORIES.forEach(cat => {
+    const div = document.createElement('div');
+    div.className = 'cat' + (cat.open ? ' open' : '');
+    div.innerHTML = `
+      <div class="cat-head" data-cat="${cat.id}">
+        <span class="ic">${cat.ic}</span>
+        <span class="name">${cat.n}</span>
+        <span class="arr">›</span>
+      </div>
+      <div class="cat-body" id="catbody-${cat.id}"></div>
+      <div class="cat-actions">
+        <button data-cat="${cat.id}" data-act="on">Alle an</button>
+        <button data-cat="${cat.id}" data-act="off">Alle aus</button>
+      </div>
+    `;
+    c.appendChild(div);
+
+    const body = div.querySelector(`#catbody-${cat.id}`);
+    Object.entries(LAYERS).filter(([_, l]) => l.cat === cat.id).forEach(([key, l]) => {
+      const el = document.createElement('div');
+      el.className = 'layer-toggle' + (l.on ? '' : ' off');
+      const swatchCls = l.line ? (l.dash ? 'swatch line dash' : 'swatch line') : 'swatch';
+      el.innerHTML = `
+        <span class="${swatchCls}" style="background:${l.c};color:${l.c}"></span>
+        <span class="name">${l.n}</span>
+        <span class="cnt" id="cnt-${key}"></span>
+      `;
+      el.onclick = () => toggleLayer(key, el);
+      body.appendChild(el);
+    });
+  });
+
+  // Toggle category
+  document.querySelectorAll('.cat-head').forEach(h => {
+    h.onclick = () => h.parentElement.classList.toggle('open');
+  });
+  // All on/off
+  document.querySelectorAll('.cat-actions button').forEach(b => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const target = b.dataset.act === 'on';
+      Object.entries(LAYERS).filter(([_,l]) => l.cat === b.dataset.cat).forEach(([key, l]) => {
+        if (l.on !== target) {
+          l.on = target;
+          if (target) { map.addLayer(l.group); if (key === 'planes') startPlanes(); if (key === 'ships') startShips(); if (key === 'quake') loadQuakes(); if (key === 'disaster') loadDisasters(); }
+          else { map.removeLayer(l.group); if (key === 'planes') stopPlanes(); if (key === 'ships') stopShips(); }
+          const el = document.querySelector(`#cnt-${key}`)?.parentElement;
+          if (el) el.classList.toggle('off', !target);
+        }
+      });
+    };
+  });
+}
+
+function toggleLayer(key, el) {
+  const l = LAYERS[key];
+  l.on = !l.on;
+  el.classList.toggle('off', !l.on);
+  if (l.on) {
+    map.addLayer(l.group);
+    if (key === 'planes') startPlanes();
+    if (key === 'ships') startShips();
+    if (key === 'quake') loadQuakes();
+    if (key === 'disaster') loadDisasters();
+  } else {
+    map.removeLayer(l.group);
+    if (key === 'planes') stopPlanes();
+    if (key === 'ships') stopShips();
+  }
+}
+
+function setCnt(k, v) {
+  const el = document.getElementById('cnt-' + k);
+  if (el) el.textContent = v;
+}
+
+/* ════ STATIC RENDERING ════ */
+function popup(title, html, tagColor, tagText, lat, lng) {
+  const askBtn = (lat !== undefined) ? `<br><span class="ask-region" onclick="window.askAboutRegion(${lat},${lng},'${title.replace(/'/g,"\\'")}')">→ KI-Analyse</span>` : '';
+  return `<b>${title}</b><br>${html}<br><span class="tag" style="background:${tagColor}22;color:${tagColor}">${tagText}</span>${askBtn}`;
+}
+
+function renderStatic() {
+  // Pipelines
+  R.pipelines.forEach(p => {
+    const lg = p.t === 'oil' ? LAYERS.pipeOil : LAYERS.pipeGas;
+    L.polyline(p.c, {
+      color: lg.c, weight: 2.5, opacity: .85,
+      dashArray: p.s === 'beschädigt' ? '3 5' : (p.t === 'gas' ? '7 5' : null)
+    })
+    .bindPopup(popup(p.n, `Status: <b>${p.s}</b>`, lg.c, p.t === 'oil' ? 'Ölpipeline' : 'Gaspipeline'))
+    .addTo(lg.group);
+  });
+  setCnt('pipeOil', R.pipelines.filter(p => p.t === 'oil').length);
+  setCnt('pipeGas', R.pipelines.filter(p => p.t === 'gas').length);
+
+  // Routes (sea + rail)
+  R.routes.forEach(r => {
+    const isRail = r.t === 'rail';
+    const lg = isRail ? LAYERS.brirail : LAYERS.routes;
+    L.polyline(r.c, {color: lg.c, weight: isRail ? 2.2 : 1.8, opacity: .65, dashArray: isRail ? '8 4' : null})
+      .bindPopup(popup(r.n, isRail ? 'Eisenbahnkorridor' : 'Seehandelsroute', lg.c, isRail ? 'BRI/Rail' : 'Seeroute'))
+      .addTo(lg.group);
+  });
+  setCnt('routes', R.routes.filter(r => r.t !== 'rail').length);
+  setCnt('brirail', R.routes.filter(r => r.t === 'rail').length);
+
+  // Cables
+  R.cables.forEach(c => {
+    L.polyline(c.c, {color: LAYERS.cables.c, weight: 1.6, opacity: .55, dashArray: '5 3'})
+      .bindPopup(popup(c.n, 'Internet-Seekabel', LAYERS.cables.c, 'Datenkabel'))
+      .addTo(LAYERS.cables.group);
+  });
+  setCnt('cables', R.cables.length);
+
+  // Chokepoints
+  R.chokes.forEach(c => {
+    L.circleMarker([c.la, c.lo], {radius:6, color:LAYERS.choke.c, fillColor:LAYERS.choke.c, fillOpacity:.7, weight:2})
+      .bindPopup(popup(c.n, `${c.d}<br><span class="row"><span>Tagesvolumen:</span><b>${c.volume}M $</b></span>`, LAYERS.choke.c, 'Chokepoint', c.la, c.lo))
+      .addTo(LAYERS.choke.group);
+  });
+  setCnt('choke', R.chokes.length);
+
+  // Commercial ports
+  R.ports.forEach(p => {
+    L.circleMarker([p.la, p.lo], {radius:5, color:LAYERS.ports.c, fillColor:LAYERS.ports.c, fillOpacity:.7, weight:2})
+      .bindPopup(popup(`⚓ ${p.n}`, `${p.d}<br><span class="row"><span>Land:</span><b>${p.country}</b></span>`, LAYERS.ports.c, 'Hafen', p.la, p.lo))
+      .addTo(LAYERS.ports.group);
+  });
+  setCnt('ports', R.ports.length);
+
+  // Military bases - split by type
+  let nNaval=0, nAir=0, nBase=0;
+  R.militaryBases.forEach(b => {
+    let lg;
+    if (b.type === 'naval') { lg = LAYERS.navalBases; nNaval++; }
+    else if (b.type === 'air') { lg = LAYERS.airBases; nAir++; }
+    else { lg = LAYERS.bases; nBase++; }
+    const sym = b.type === 'naval' ? '⚓' : b.type === 'air' ? '✈' : '🛡';
+    L.circleMarker([b.la, b.lo], {
+      radius: 5, color: lg.c, fillColor: lg.c, fillOpacity: .6, weight: 1.5
+    })
+    .bindPopup(popup(`${sym} ${b.n}`, `${b.d}<br><span class="row"><span>Träger:</span><b>${b.country}</b></span>`, lg.c, b.type === 'naval' ? 'Militärhafen' : b.type === 'air' ? 'Luftwaffe' : 'Militärbasis', b.la, b.lo))
+    .addTo(lg.group);
+  });
+  setCnt('bases', nBase); setCnt('navalBases', nNaval); setCnt('airBases', nAir);
+
+  // Exercises
+  R.exercises.forEach(e => {
+    L.circleMarker([e.la, e.lo], {radius:7, color:LAYERS.exercises.c, fillColor:LAYERS.exercises.c, fillOpacity:.3, weight:2, dashArray:'2 3'})
+      .bindPopup(popup(`⚔ ${e.n}`, `${e.d}<br><span class="row"><span>Träger:</span><b>${e.country}</b></span>`, LAYERS.exercises.c, 'Militärübung', e.la, e.lo))
+      .addTo(LAYERS.exercises.group);
+  });
+  setCnt('exercises', R.exercises.length);
+
+  // Launch sites
+  R.launchSites.forEach(s => {
+    L.circleMarker([s.la, s.lo], {radius:6, color:LAYERS.launchSites.c, fillColor:LAYERS.launchSites.c, fillOpacity:.55, weight:2})
+      .bindPopup(popup(`🚀 ${s.n}`, `${s.d}<br><span class="row"><span>Typ:</span><b>${s.type}</b></span><span class="row"><span>Land:</span><b>${s.country}</b></span>`, LAYERS.launchSites.c, 'Startplatz', s.la, s.lo))
+      .addTo(LAYERS.launchSites.group);
+  });
+  setCnt('launchSites', R.launchSites.length);
+
+  // BRI projects
+  R.bri.forEach(p => {
+    const symMap = {port:'⚓', rail:'🚆', energy:'⚡', land:'🛣', zone:'🏭', air:'✈'};
+    L.circleMarker([p.la, p.lo], {radius:5, color:LAYERS.bri.c, fillColor:LAYERS.bri.c, fillOpacity:.55, weight:1.5})
+      .bindPopup(popup(`${symMap[p.type]||'•'} ${p.n}`, `${p.d}<br><span class="row"><span>Land:</span><b>${p.country}</b></span><span class="row"><span>Typ:</span><b>${p.type}</b></span>`, LAYERS.bri.c, 'BRI', p.la, p.lo))
+      .addTo(LAYERS.bri.group);
+  });
+  setCnt('bri', R.bri.length);
+
+  // Nuclear
+  R.nuclear.forEach(n => {
+    L.circleMarker([n.la, n.lo], {radius:6, color:LAYERS.nuclear.c, fillColor:LAYERS.nuclear.c, fillOpacity:.5, weight:2})
+      .bindPopup(popup(`☢ ${n.n}`, `${n.d}<br><span class="row"><span>Reaktoren:</span><b>${n.reactors}</b></span><span class="row"><span>Land:</span><b>${n.country}</b></span>`, LAYERS.nuclear.c, 'Atomkraftwerk', n.la, n.lo))
+      .addTo(LAYERS.nuclear.group);
+  });
+  setCnt('nuclear', R.nuclear.length);
+
+  // Resources split by type
+  const resMap = {oil:'resOil', gas:'resGas', lithium:'resLi', rare_earth:'resRee', cobalt:'resCu', copper:'resCu', uranium:'resU', iron:'resFe'};
+  const resCount = {};
+  R.resources.forEach(r => {
+    const key = resMap[r.type] || 'resOil';
+    const lg = LAYERS[key];
+    resCount[key] = (resCount[key]||0)+1;
+    L.circleMarker([r.la, r.lo], {radius:5, color:lg.c, fillColor:lg.c, fillOpacity:.55, weight:1.5})
+      .bindPopup(popup(`⛏ ${r.n}`, `${r.d}<br><span class="row"><span>Typ:</span><b>${r.type}</b></span><span class="row"><span>Land:</span><b>${r.country}</b></span>`, lg.c, r.type, r.la, r.lo))
+      .addTo(lg.group);
+  });
+  Object.entries(resCount).forEach(([k,v])=>setCnt(k,v));
+
+  // Sanctions
+  R.sanctions.forEach(s => {
+    L.circleMarker([s.la, s.lo], {radius:9, color:LAYERS.sanctions.c, fillColor:LAYERS.sanctions.c, fillOpacity:.22, weight:2, dashArray:'3 3'})
+      .bindPopup(popup(s.n, `${s.d}<br><span class="row"><span>Regime:</span><b>${s.regime}</b></span>`, LAYERS.sanctions.c, 'Sanktioniert', s.la, s.lo))
+      .addTo(LAYERS.sanctions.group);
+  });
+  setCnt('sanctions', R.sanctions.length);
+
+  // Military actions
+  R.militaryActions.forEach(a => {
+    L.circleMarker([a.la, a.lo], {radius:8, color:LAYERS.action.c, fillColor:LAYERS.action.c, fillOpacity:.35, weight:2})
+      .bindPopup(popup(`⚔ ${a.n}`, `${a.d}<br><span class="row"><span>Seit:</span><b>${a.since}</b></span>`, LAYERS.action.c, 'Militäraktion', a.la, a.lo))
+      .addTo(LAYERS.action.group);
+  });
+  setCnt('action', R.militaryActions.length);
+}
+
+/* ════ LIVE: KONFLIKTE ════ */
+let conflictStore = [];
+let conflictTimer = null;
+
+async function loadConflicts() {
+  setStatus('Lade Konflikte…', 'load');
+  ['conflict','battle','protest'].forEach(k => LAYERS[k].group.clearLayers());
+  conflictStore = [];
+
+  if (CONFIG.USE_BACKEND) {
+    try {
+      const res = await fetch(`${CONFIG.BACKEND_BASE}/conflicts`);
+      if (!res.ok) throw new Error('HTTP '+res.status);
+      const data = await res.json();
+      placeConflicts(data.events || []);
+      setStatus(`${conflictStore.length} Live-Konflikte`, 'ok');
+    } catch (e) {
+      console.error('Conflicts:', e);
+      useDemoConflicts('Backend-Fehler');
+    }
+  } else {
+    useDemoConflicts('Demo-Modus');
+  }
+  updateConflictCounts();
+}
+
+function placeConflicts(events) {
+  events.forEach(ev => {
+    const cat = ev.c || 'conflict';
+    const lg = LAYERS[cat] || LAYERS.conflict;
+    const r = ev.count ? Math.min(4 + Math.log(ev.count + 1) * 2.2, 16) : 7;
+    L.circleMarker([ev.la, ev.lo], {radius:r, color:lg.c, fillColor:lg.c, fillOpacity:.35, weight:1.5})
+      .bindPopup(popup(ev.n, `${ev.i || ''}${ev.count ? `<br><span class="row"><span>Meldungen:</span><b>${ev.count}</b></span>` : ''}`, lg.c, lg.n, ev.la, ev.lo))
+      .addTo(lg.group);
+    conflictStore.push(ev);
+  });
+}
+
+function useDemoConflicts(reason) {
+  placeConflicts(R.demoConflicts);
+  setStatus(`${conflictStore.length} Konflikte · ${reason}`, CONFIG.USE_BACKEND ? 'err' : 'ok');
+}
+
+function updateConflictCounts() {
+  ['conflict','battle','protest'].forEach(k =>
+    setCnt(k, conflictStore.filter(e => (e.c || 'conflict') === k).length));
+  document.getElementById('evtTotal').textContent = conflictStore.length;
+}
+
+/* ════ LIVE: ERDBEBEN (USGS direkt, CORS-ok) ════ */
+async function loadQuakes() {
+  LAYERS.quake.group.clearLayers();
+  try {
+    const res = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_week.geojson');
+    const data = await res.json();
+    const features = data.features || [];
+    features.forEach(f => {
+      const [lo, la, depth] = f.geometry.coordinates;
+      const m = f.properties.mag;
+      const r = Math.max(3, m * 1.8);
+      L.circleMarker([la, lo], {radius:r, color:LAYERS.quake.c, fillColor:LAYERS.quake.c, fillOpacity:.35, weight:1.5})
+        .bindPopup(popup(`M${m.toFixed(1)} ${f.properties.place || 'Erdbeben'}`, `<span class="row"><span>Tiefe:</span><b>${depth} km</b></span><span class="row"><span>Zeit:</span><b>${new Date(f.properties.time).toISOString().slice(0,16).replace('T',' ')}</b></span>`, LAYERS.quake.c, `Erdbeben M${m.toFixed(1)}`, la, lo))
+        .addTo(LAYERS.quake.group);
+    });
+    setCnt('quake', features.length);
+  } catch (e) {
+    console.error('Quakes:', e);
+    setCnt('quake', '!');
+  }
+}
+
+/* ════ LIVE: NATURKATASTROPHEN (EONET direkt) ════ */
+async function loadDisasters() {
+  LAYERS.disaster.group.clearLayers();
+  try {
+    const res = await fetch('https://eonet.gsfc.nasa.gov/api/v3/events?status=open&days=30');
+    const data = await res.json();
+    let count = 0;
+    (data.events || []).forEach(ev => {
+      const g = ev.geometry?.[ev.geometry.length - 1];
+      if (!g) return;
+      const [lo, la] = g.coordinates;
+      if (typeof lo !== 'number') return;
+      L.circleMarker([la, lo], {radius:6, color:LAYERS.disaster.c, fillColor:LAYERS.disaster.c, fillOpacity:.4, weight:1.5})
+        .bindPopup(popup(ev.title, `<span class="row"><span>Kategorie:</span><b>${ev.categories?.[0]?.title || '-'}</b></span>`, LAYERS.disaster.c, 'Naturkatastrophe', la, lo))
+        .addTo(LAYERS.disaster.group);
+      count++;
+    });
+    setCnt('disaster', count);
+  } catch (e) {
+    console.error('EONET:', e);
+    setCnt('disaster', '!');
+  }
+}
+
+/* ════ LIVE: FLUGZEUGE ════ */
+let planeTimer = null;
+function startPlanes() {
+  loadPlanes();
+  planeTimer = setInterval(loadPlanes, CONFIG.PLANE_REFRESH_MS);
+}
+function stopPlanes() {
+  clearInterval(planeTimer);
+}
+async function loadPlanes() {
+  LAYERS.planes.group.clearLayers();
+  if (!CONFIG.USE_BACKEND) {
+    R.demoPlanes.forEach(p => planeMarker(p.la, p.lo, p.heading, p.callsign + ' (Demo)', p.type));
+    setCnt('planes', R.demoPlanes.length + ' demo');
+    return;
+  }
+  try {
+    const b = map.getBounds();
+    const url = `${CONFIG.BACKEND_BASE}/planes?lamin=${b.getSouth()}&lomin=${b.getWest()}&lamax=${b.getNorth()}&lomax=${b.getEast()}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const states = data.states || [];
+    states.slice(0, 300).forEach(s => {
+      if (s[5] && s[6]) planeMarker(s[6], s[5], s[10] || 0, (s[1] || '').trim() || s[0], 'civilian');
+    });
+    setCnt('planes', states.length);
+  } catch (e) {
+    console.error('Planes:', e);
+    setCnt('planes', '!');
+  }
+}
+function planeMarker(la, lo, heading, label, type) {
+  const cls = 'plane-icon' + (type === 'military' ? ' military' : '');
+  const icon = L.divIcon({className:'', html:`<div class="${cls}" style="transform:rotate(${heading}deg)">✈</div>`, iconSize:[16,16]});
+  L.marker([la, lo], {icon}).bindPopup(`<b>${label}</b><br>Kurs ${Math.round(heading)}°`).addTo(LAYERS.planes.group);
+}
+
+/* ════ LIVE: SCHIFFE ════ */
+let shipTimer = null;
+function startShips() {
+  loadShips();
+  shipTimer = setInterval(loadShips, CONFIG.SHIP_REFRESH_MS);
+}
+function stopShips() {
+  clearInterval(shipTimer);
+}
+async function loadShips() {
+  LAYERS.ships.group.clearLayers();
+  LAYERS.shipsMil.group.clearLayers();
+  if (!CONFIG.USE_BACKEND) {
+    placeShips(R.demoShips, true);
+    return;
+  }
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/ships`);
+    if (!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    placeShips(data.ships || R.demoShips, !data.ships);
+  } catch (e) {
+    console.error('Ships:', e);
+    placeShips(R.demoShips, true);
+  }
+}
+function placeShips(ships, isDemo) {
+  let mil = 0, civ = 0;
+  ships.forEach(s => {
+    const isMil = s.type === 'military';
+    const lg = isMil ? LAYERS.shipsMil : LAYERS.ships;
+    if (isMil) mil++; else civ++;
+    const cls = 'ship-icon' + (isMil ? ' military' : '');
+    const icon = L.divIcon({className:'', html:`<div class="${cls}" style="transform:rotate(${s.heading||0}deg)">${isMil?'◆':'▲'}</div>`, iconSize:[14,14]});
+    L.marker([s.la, s.lo], {icon}).bindPopup(`<b>${s.n}${isDemo?' (Demo)':''}</b><br>Typ: ${s.type}<br>Flagge: ${s.flag}<br>Kurs: ${s.heading||0}°`).addTo(lg.group);
+  });
+  setCnt('ships', civ + (isDemo?' demo':''));
+  setCnt('shipsMil', mil + (isDemo?' demo':''));
+}
+
+/* ════ STATUS BAR ════ */
+function setStatus(t, state) {
+  document.getElementById('statusText').textContent = t;
+  document.getElementById('statusDot').className = 'dot' + (state === 'load' ? ' load' : state === 'err' ? ' err' : '');
+}
+
+/* ════ TOPBAR BUTTONS ════ */
+document.getElementById('refreshBtn').onclick = () => {
+  loadConflicts();
+  if (LAYERS.planes.on) loadPlanes();
+  if (LAYERS.ships.on) loadShips();
+  if (LAYERS.quake.on) loadQuakes();
+  if (LAYERS.disaster.on) loadDisasters();
+};
+document.getElementById('planeBtn').onclick = () => {
+  LAYERS.planes.on = !LAYERS.planes.on;
+  const el = document.querySelector(`#cnt-planes`)?.parentElement;
+  if (el) el.classList.toggle('off', !LAYERS.planes.on);
+  if (LAYERS.planes.on) { map.addLayer(LAYERS.planes.group); startPlanes(); }
+  else { map.removeLayer(LAYERS.planes.group); stopPlanes(); }
+};
+document.getElementById('shipBtn').onclick = () => {
+  LAYERS.ships.on = !LAYERS.ships.on;
+  LAYERS.shipsMil.on = LAYERS.ships.on;
+  ['ships','shipsMil'].forEach(k => {
+    const el = document.querySelector(`#cnt-${k}`)?.parentElement;
+    if (el) el.classList.toggle('off', !LAYERS[k].on);
+    if (LAYERS[k].on) map.addLayer(LAYERS[k].group); else map.removeLayer(LAYERS[k].group);
+  });
+  if (LAYERS.ships.on) startShips(); else stopShips();
+};
+document.getElementById('legendBtn').onclick = () => {
+  document.getElementById('legend').classList.toggle('show');
+};
+
+/* ════ CLOCK ════ */
+setInterval(() => {
+  document.getElementById('utcTime').textContent = new Date().toISOString().substr(11,5);
+}, 1000);
+
+/* ════ SUCHE ════ */
+const searchableData = () => {
+  const items = [];
+  R.ports.forEach(p => items.push({n:p.n, la:p.la, lo:p.lo, typ:'Hafen'}));
+  R.militaryBases.forEach(b => items.push({n:b.n, la:b.la, lo:b.lo, typ:'Militärbasis'}));
+  R.nuclear.forEach(n => items.push({n:n.n, la:n.la, lo:n.lo, typ:'AKW'}));
+  R.chokes.forEach(c => items.push({n:c.n, la:c.la, lo:c.lo, typ:'Chokepoint'}));
+  R.bri.forEach(b => items.push({n:b.n, la:b.la, lo:b.lo, typ:'BRI'}));
+  R.launchSites.forEach(l => items.push({n:l.n, la:l.la, lo:l.lo, typ:'Startplatz'}));
+  R.exercises.forEach(e => items.push({n:e.n, la:e.la, lo:e.lo, typ:'Übung'}));
+  R.resources.forEach(r => items.push({n:r.n, la:r.la, lo:r.lo, typ:'Rohstoff'}));
+  R.militaryActions.forEach(a => items.push({n:a.n, la:a.la, lo:a.lo, typ:'Militäraktion'}));
+  R.pipelines.forEach(p => items.push({n:p.n, la:p.c[0][0], lo:p.c[0][1], typ:'Pipeline'}));
+  return items;
+};
+const allSearchable = searchableData();
+const searchInput = document.getElementById('searchInput');
+const searchResults = document.getElementById('searchResults');
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.trim().toLowerCase();
+  if (q.length < 2) { searchResults.classList.add('empty'); return; }
+  const hits = allSearchable.filter(i => i.n.toLowerCase().includes(q)).slice(0, 12);
+  if (!hits.length) { searchResults.classList.add('empty'); return; }
+  searchResults.classList.remove('empty');
+  searchResults.innerHTML = hits.map(h =>
+    `<div class="search-result" data-la="${h.la}" data-lo="${h.lo}"><span>${h.n}</span><span class="typ">${h.typ}</span></div>`
+  ).join('');
+  searchResults.querySelectorAll('.search-result').forEach(r => {
+    r.onclick = () => {
+      map.flyTo([+r.dataset.la, +r.dataset.lo], 7, {duration:1.0});
+      searchResults.classList.add('empty');
+      searchInput.value = '';
+    };
+  });
+});
+
+/* ════ KI-PANEL ════ */
+const aiPanel = document.getElementById('ai');
+const aiBody = document.getElementById('aiBody');
+const askInput = document.getElementById('askInput');
+const sendBtn = document.getElementById('sendBtn');
+let currentRegion = null;
+let history = [];
+
+function distanceKm(la1, lo1, la2, lo2) {
+  const R = 6371, toRad = x => x * Math.PI / 180;
+  const dLat = toRad(la2-la1), dLng = toRad(lo2-lo1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(la1))*Math.cos(toRad(la2))*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+function nearbyAny(lat, lng, arr, radKm = 1200) {
+  return arr.filter(o => distanceKm(lat, lng, o.la, o.lo) < radKm);
+}
+
+function gatherContext(lat, lng) {
+  return {
+    conflicts: nearbyAny(lat, lng, conflictStore).map(c => `${c.n} (${c.i||''})`).slice(0, 8),
+    actions: nearbyAny(lat, lng, R.militaryActions).map(a => `${a.n}: ${a.d}`).slice(0, 5),
+    chokes: nearbyAny(lat, lng, R.chokes, 1500).map(c => c.n),
+    ports: nearbyAny(lat, lng, R.ports, 800).map(p => p.n),
+    bases: nearbyAny(lat, lng, R.militaryBases, 1000).map(b => `${b.n} (${b.country})`).slice(0, 10),
+    exercises: nearbyAny(lat, lng, R.exercises, 1500).map(e => `${e.n} (${e.country})`),
+    nuclear: nearbyAny(lat, lng, R.nuclear, 800).map(n => n.n),
+    bri: nearbyAny(lat, lng, R.bri, 1500).map(b => `${b.n} (${b.type})`).slice(0, 6),
+    launches: nearbyAny(lat, lng, R.launchSites, 1500).map(l => l.n),
+    resources: nearbyAny(lat, lng, R.resources, 1200).map(r => `${r.n} (${r.type})`).slice(0, 8),
+    sanctions: nearbyAny(lat, lng, R.sanctions, 1500).map(s => s.n),
+    pipelinesNear: R.pipelines.filter(p => p.c.some(pt => distanceKm(lat, lng, pt[0], pt[1]) < 600)).map(p => p.n).slice(0, 6),
+    cablesNear: R.cables.filter(c => c.c.some(pt => distanceKm(lat, lng, pt[0], pt[1]) < 800)).map(c => c.n).slice(0, 4),
+  };
+}
+
+window.askAboutRegion = function(lat, lng, name) {
+  openRegion(lat, lng, name);
+};
+
+map.on('click', async e => {
+  openRegion(e.latlng.lat, e.latlng.lng);
+});
+
+async function openRegion(lat, lng, presetName) {
+  currentRegion = {lat: lat.toFixed(3), lng: lng.toFixed(3)};
+  history = [];
+  aiBody.innerHTML = '';
+  document.getElementById('emptyState')?.remove();
+  document.getElementById('aiCoords').textContent = `${currentRegion.lat}°, ${currentRegion.lng}°`;
+  document.getElementById('aiRegion').textContent = presetName || 'Ermittle Region…';
+
+  currentRegion.context = gatherContext(lat, lng);
+  const parts = [];
+  const ctx = currentRegion.context;
+  if (ctx.conflicts.length) parts.push(`${ctx.conflicts.length} Konflikt(e)`);
+  if (ctx.actions.length) parts.push(`${ctx.actions.length} Militäraktion(en)`);
+  if (ctx.bases.length) parts.push(`${ctx.bases.length} Mil.-Basis/-en`);
+  if (ctx.chokes.length) parts.push(`${ctx.chokes.length} Chokepoint(s)`);
+  if (ctx.ports.length) parts.push(`${ctx.ports.length} Hafen/Häfen`);
+  if (ctx.nuclear.length) parts.push(`${ctx.nuclear.length} AKW`);
+  if (ctx.resources.length) parts.push(`${ctx.resources.length} Rohstoff-Stand.`);
+  if (ctx.bri.length) parts.push(`${ctx.bri.length} BRI`);
+  if (ctx.pipelinesNear.length) parts.push(`${ctx.pipelinesNear.length} Pipeline(s)`);
+  if (ctx.cablesNear.length) parts.push(`${ctx.cablesNear.length} Datenkabel`);
+  document.getElementById('aiCtx').textContent = parts.length ? ('Erkannt: ' + parts.join(' · ')) : 'Wenig lokaler Kontext';
+
+  aiPanel.classList.add('open');
+  if (!presetName) reverseGeocode(lat, lng);
+  else currentRegion.name = presetName;
+  loadCountryInfo(lat, lng);
+}
+
+async function reverseGeocode(lat, lng) {
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=5&accept-language=de`);
+    const d = await r.json();
+    const name = d.address?.country || d.display_name || `Region ${currentRegion.lat}, ${currentRegion.lng}`;
+    document.getElementById('aiRegion').textContent = name;
+    currentRegion.name = name;
+    currentRegion.iso2 = d.address?.country_code?.toUpperCase();
+    if (currentRegion.iso2) loadCountryInfoByIso(currentRegion.iso2);
+  } catch {
+    document.getElementById('aiRegion').textContent = `Region ${currentRegion.lat}, ${currentRegion.lng}`;
+    currentRegion.name = 'diese Region';
+  }
+}
+
+async function loadCountryInfo(lat, lng) {
+  // Wartet auf reverseGeocode für ISO2
+}
+
+async function loadCountryInfoByIso(iso2) {
+  const ciDiv = document.getElementById('countryInfo');
+  ciDiv.classList.remove('show');
+  if (!CONFIG.USE_BACKEND) return;
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/country?iso=${iso2}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d || d.error) return;
+    ciDiv.innerHTML = `
+      <div class="ci-row"><span>Bevölkerung</span><b>${fmtNum(d.population)}</b></div>
+      <div class="ci-row"><span>BIP (USD)</span><b>${fmtMoney(d.gdp)}</b></div>
+      <div class="ci-row"><span>BIP/Kopf</span><b>${fmtMoney(d.gdpPerCapita)}</b></div>
+      <div class="ci-row"><span>Militärausg. (% BIP)</span><b>${d.militaryPct ? d.militaryPct.toFixed(2)+'%' : '–'}</b></div>
+      <div class="ci-row"><span>Inflation</span><b>${d.inflation ? d.inflation.toFixed(2)+'%' : '–'}</b></div>
+      <div class="ci-row"><span>Lebenserwartung</span><b>${d.lifeExp ? d.lifeExp.toFixed(1)+' J' : '–'}</b></div>
+    `;
+    ciDiv.classList.add('show');
+    currentRegion.economic = d;
+  } catch (e) { console.error('Country:', e); }
+}
+
+function fmtNum(n) { if (!n) return '–'; if (n>=1e9) return (n/1e9).toFixed(2)+' Mrd'; if (n>=1e6) return (n/1e6).toFixed(2)+' Mio'; if (n>=1e3) return (n/1e3).toFixed(1)+'k'; return n.toString(); }
+function fmtMoney(n) { if (!n) return '–'; return '$' + fmtNum(n); }
+
+document.getElementById('closeAi').onclick = () => aiPanel.classList.remove('open');
+document.querySelectorAll('.chip').forEach(c => c.onclick = () => { askInput.value = c.dataset.q; sendQuestion(); });
+sendBtn.onclick = sendQuestion;
+askInput.addEventListener('input', () => { askInput.style.height = 'auto'; askInput.style.height = Math.min(askInput.scrollHeight, 120) + 'px'; });
+askInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuestion(); } });
+
+function buildContextString() {
+  const c = currentRegion.context || {};
+  const lines = [];
+  if (c.actions?.length) lines.push('AKTUELLE MILITÄRAKTIONEN: ' + c.actions.join('; '));
+  if (c.conflicts?.length) lines.push('Konflikt-Ereignisse: ' + c.conflicts.join('; '));
+  if (c.bases?.length) lines.push('Militärbasen in Reichweite: ' + c.bases.join('; '));
+  if (c.exercises?.length) lines.push('Militärübungen: ' + c.exercises.join(', '));
+  if (c.chokes?.length) lines.push('Strategische Chokepoints: ' + c.chokes.join(', '));
+  if (c.ports?.length) lines.push('Häfen: ' + c.ports.join(', '));
+  if (c.nuclear?.length) lines.push('Atomkraftwerke: ' + c.nuclear.join(', '));
+  if (c.resources?.length) lines.push('Rohstoffvorkommen: ' + c.resources.join('; '));
+  if (c.bri?.length) lines.push('BRI-Projekte: ' + c.bri.join(', '));
+  if (c.pipelinesNear?.length) lines.push('Pipelines in Region: ' + c.pipelinesNear.join(', '));
+  if (c.cablesNear?.length) lines.push('Internet-Seekabel: ' + c.cablesNear.join(', '));
+  if (c.launches?.length) lines.push('Raumfahrt/Raketen: ' + c.launches.join(', '));
+  if (c.sanctions?.length) lines.push('Sanktionierte Staaten im Umfeld: ' + c.sanctions.join(', '));
+  if (currentRegion.economic) {
+    const e = currentRegion.economic;
+    lines.push(`Wirtschaftsdaten: BIP ${fmtMoney(e.gdp)}, BIP/Kopf ${fmtMoney(e.gdpPerCapita)}, Bev. ${fmtNum(e.population)}${e.militaryPct?', Mil.-Ausg. '+e.militaryPct.toFixed(2)+'% BIP':''}`);
+  }
+  return lines.length ? ('\n\nLOKALER KARTENKONTEXT:\n' + lines.join('\n')) : '';
+}
+
+async function sendQuestion() {
+  const q = askInput.value.trim();
+  if (!q || !currentRegion) return;
+  askInput.value = ''; askInput.style.height = 'auto';
+  sendBtn.disabled = true;
+  appendMsg('user', q);
+  const el = appendMsg('ai', ''); el.classList.add('thinking'); el.textContent = 'Analysiere…';
+
+  const sys = `Du bist ein erfahrener geopolitischer Analyst mit Fokus auf Sicherheit, Energie, Handel und Machtkonkurrenz. Der Nutzer hat auf einer interaktiven Weltkarte die Region "${currentRegion.name}" (${currentRegion.lat}°, ${currentRegion.lng}°) ausgewählt.
+
+Beantworte präzise, faktenbasiert, mit konkreten Namen (Akteure, Häfen, Pipelines, Truppenstärken, BIP-Zahlen etc.). Nutze den mitgelieferten Kartenkontext, wo relevant. Antworte auf Deutsch, kompakt (max ~250 Wörter). Strukturiere komplexe Antworten mit **Fettung** als Zwischenüberschriften. Nenne Unsicherheiten offen.${buildContextString()}`;
+
+  history.push({role:'user', content:q});
+
+  if (!CONFIG.USE_BACKEND) {
+    el.classList.remove('thinking');
+    el.innerHTML = `<b>Backend nicht aktiv.</b>\n\nSetze CONFIG.USE_BACKEND=true und deploy mit Netlify Functions.${buildContextString()}`;
+    sendBtn.disabled = false;
+    return;
+  }
+
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/ai`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({system:sys, messages:history})
+    });
+    if (!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim() || '(Keine Antwort)';
+    history.push({role:'assistant', content:text});
+    el.classList.remove('thinking');
+    renderAi(el, text);
+  } catch (err) {
+    el.classList.remove('thinking');
+    el.textContent = 'Fehler: ' + err.message;
+  }
+  sendBtn.disabled = false;
+  aiBody.scrollTop = aiBody.scrollHeight;
+}
+
+function appendMsg(role, text) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + role;
+  el.textContent = text;
+  aiBody.appendChild(el);
+  aiBody.scrollTop = aiBody.scrollHeight;
+  return el;
+}
+function renderAi(el, text) {
+  el.innerHTML = text.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+}
+
+/* ════ LEGEND ════ */
+function buildLegend() {
+  const l = document.getElementById('legend');
+  let html = '<h4>Legende</h4>';
+  Object.entries(LAYERS).forEach(([key, lyr]) => {
+    html += `<div class="lrow"><span style="background:${lyr.c}"></span>${lyr.n}</div>`;
+  });
+  l.innerHTML = html;
+}
+
+document.getElementById('backendNote').textContent = CONFIG.USE_BACKEND
+  ? 'Backend aktiv · Live-Daten via Netlify Functions'
+  : 'Demo-Modus';
+
+/* ════ START ════ */
+buildCategoryUI();
+renderStatic();
+buildLegend();
+loadConflicts();
+conflictTimer = setInterval(loadConflicts, CONFIG.CONFLICT_REFRESH_MS);

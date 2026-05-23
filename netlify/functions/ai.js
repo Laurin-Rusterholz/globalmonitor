@@ -1,5 +1,9 @@
+// Anthropic-Proxy für KI-Regionsanalyse
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Method Not Allowed' };
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return json({ error: 'ANTHROPIC_API_KEY ist in Netlify nicht gesetzt.' }, 500);
+  }
   try {
     const { system, messages } = JSON.parse(event.body);
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -10,15 +14,23 @@ exports.handler = async (event) => {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1200,
         system,
         messages
       })
     });
     const data = await res.json();
-    return { statusCode:200, headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) };
+    return json(data, res.status);
   } catch (e) {
-    return { statusCode:500, headers:{'Content-Type':'application/json'}, body:JSON.stringify({ error:e.message }) };
+    return json({ error: e.message }, 500);
   }
 };
+
+function json(obj, status=200){
+  return {
+    statusCode: status,
+    headers:{'Content-Type':'application/json','Access-Control-Allow-Origin':'*'},
+    body: JSON.stringify(obj)
+  };
+}
