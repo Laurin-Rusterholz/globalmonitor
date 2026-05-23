@@ -644,6 +644,27 @@ body.project-mode .proj-toolbar{
 .connection-line{stroke-dasharray:5 5;animation:dash 30s linear infinite}
 @keyframes dash{to{stroke-dashoffset:-200}}
 
+/* Drawing-Sub-Toolbar (Auswahl der Zeichen-Werkzeuge) */
+.draw-sub-toolbar{
+  position:fixed; bottom:14px; left:50%; transform:translateX(-50%);
+  z-index:1500; display:none; gap:6px; flex-wrap:wrap;
+  background:rgba(15,20,29,.97); backdrop-filter:blur(10px);
+  border:2px solid var(--protest); border-radius:30px;
+  padding:8px 12px; box-shadow:0 12px 36px rgba(0,0,0,.6);
+  max-width:90vw;
+}
+.draw-sub-toolbar button{background:var(--panel-2);border:1px solid var(--line-2);
+  color:var(--ink);border-radius:20px;padding:7px 14px;cursor:pointer;
+  font-family:inherit;font-size:12px;font-weight:600}
+.draw-sub-toolbar button:hover{border-color:var(--protest);color:var(--protest)}
+.draw-sub-toolbar button.active{background:var(--protest);color:#000;border-color:var(--protest)}
+
+/* Draw-Labels */
+.draw-label{background:rgba(255,200,61,.95)!important;color:#000!important;
+  border:1px solid rgba(0,0,0,.4)!important;border-radius:5px!important;
+  padding:2px 7px!important;font-weight:600;font-size:11px;
+  box-shadow:0 2px 6px rgba(0,0,0,.4)!important;font-family:var(--font-display)}
+
 /* ════ MATERIALIEN (Newsroom-Hub-Style) ════ */
 .mat-filter-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--line)}
 .mat-filter{background:var(--panel-2);border:1px solid var(--line);color:var(--ink-dim);

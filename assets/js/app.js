@@ -5059,11 +5059,53 @@ window.loadAllResearch = async function() {
 };
 
 /* ════════════════════════════════════════════════════════════════
-   PROJEKT-ZEICHEN-WERKZEUGE (Leaflet.draw)
+   EIGENES ZEICHEN-TOOL (kein Library-Abhängigkeit)
    ════════════════════════════════════════════════════════════════ */
 let drawnItems = L.featureGroup();
-let drawControl = null;
 let drawingActive = false;
+let drawMode = null; // 'point' | 'line' | 'polygon' | 'rect' | 'circle'
+let drawPoints = [];
+let drawPreviewLayer = null;
+
+function showDrawToolbar() {
+  // Zweite Toolbar mit Werkzeug-Auswahl
+  let bar = document.getElementById('drawSubToolbar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'drawSubToolbar';
+    bar.className = 'draw-sub-toolbar';
+    bar.innerHTML = `
+      <button class="ptb-btn" data-dm="point">📍 Punkt</button>
+      <button class="ptb-btn" data-dm="line">─ Linie</button>
+      <button class="ptb-btn" data-dm="polygon">△ Polygon</button>
+      <button class="ptb-btn" data-dm="rect">▢ Rechteck</button>
+      <button class="ptb-btn" data-dm="circle">○ Kreis</button>
+      <span style="font-size:10px;color:var(--ink-dim);align-self:center;padding:0 8px">Klick auf Karte · Doppelklick beendet</span>
+      <button class="ptb-btn" id="drawDone" style="background:var(--accent);color:#000">✓ Fertig</button>
+    `;
+    document.body.appendChild(bar);
+    bar.querySelectorAll('button[data-dm]').forEach(b => {
+      b.onclick = () => setDrawMode(b.dataset.dm);
+    });
+    document.getElementById('drawDone').onclick = finishDrawing;
+  }
+  bar.style.display = 'flex';
+}
+function hideDrawToolbar() {
+  const bar = document.getElementById('drawSubToolbar');
+  if (bar) bar.style.display = 'none';
+}
+
+function setDrawMode(mode) {
+  drawMode = mode;
+  drawPoints = [];
+  if (drawPreviewLayer) { map.removeLayer(drawPreviewLayer); drawPreviewLayer = null; }
+  document.querySelectorAll('#drawSubToolbar button[data-dm]').forEach(b => {
+    b.classList.toggle('active', b.dataset.dm === mode);
+  });
+  map._container.style.cursor = 'crosshair';
+  toast(`Modus: ${mode}. Klick auf Karte`);
+}
 
 function toggleDrawing() {
   if (!activeProject) { toast('Nur im Projekt-Modus'); return; }
@@ -5072,50 +5114,132 @@ function toggleDrawing() {
   btn.classList.toggle('active', drawingActive);
   if (drawingActive) {
     if (!map.hasLayer(drawnItems)) map.addLayer(drawnItems);
-    // Gespeicherte Annotations laden
+    // Gespeicherte Zeichnungen laden
     if (activeProject.drawings) {
       try {
         const gj = L.geoJSON(activeProject.drawings, {
-          style: { color:'#ffc83d', weight:3, fillColor:'#ffc83d', fillOpacity:0.2 }
+          style: { color:'#ffc83d', weight:3, fillColor:'#ffc83d', fillOpacity:0.25 },
+          pointToLayer: (f, latlng) => L.circleMarker(latlng, { radius:7, color:'#ffc83d', fillColor:'#ffc83d', fillOpacity:0.8, weight:2 })
         });
-        gj.eachLayer(l => drawnItems.addLayer(l));
+        gj.eachLayer(l => {
+          if (l.feature?.properties?.label) l.bindTooltip(l.feature.properties.label, { permanent:true, direction:'center', className:'draw-label' });
+          drawnItems.addLayer(l);
+        });
       } catch {}
     }
-    if (!drawControl) {
-      drawControl = new L.Control.Draw({
-        edit: { featureGroup: drawnItems },
-        draw: {
-          polygon: { shapeOptions: { color:'#ffc83d', weight:3, fillOpacity:0.2 } },
-          polyline: { shapeOptions: { color:'#ffc83d', weight:3 } },
-          rectangle: { shapeOptions: { color:'#ffc83d', weight:3, fillOpacity:0.2 } },
-          circle: { shapeOptions: { color:'#ffc83d', weight:3, fillOpacity:0.2 } },
-          marker: false, circlemarker: false
-        }
-      });
-    }
-    map.addControl(drawControl);
-    map.on(L.Draw.Event.CREATED, onDrawCreated);
-    map.on(L.Draw.Event.EDITED, saveDrawings);
-    map.on(L.Draw.Event.DELETED, saveDrawings);
-    toast('Zeichnen aktiv - wähle Werkzeug in Toolbar');
+    showDrawToolbar();
+    map.on('click', drawClickHandler);
+    map.on('dblclick', drawDblClickHandler);
+    map.doubleClickZoom.disable();
+    toast('Zeichnen aktiv - wähle Werkzeug unten');
   } else {
-    if (drawControl) map.removeControl(drawControl);
-    map.off(L.Draw.Event.CREATED, onDrawCreated);
-    toast('Zeichnen aus - Skizzen bleiben');
+    finishDrawing();
+    hideDrawToolbar();
+    map._container.style.cursor = '';
+    map.off('click', drawClickHandler);
+    map.off('dblclick', drawDblClickHandler);
+    map.doubleClickZoom.enable();
+    toast('Zeichnen aus');
   }
 }
-async function onDrawCreated(e) {
-  drawnItems.addLayer(e.layer);
-  // Optional Beschriftung
-  const label = prompt('Beschriftung für diese Zeichnung (optional):', '');
-  if (label) e.layer.bindTooltip(label, { permanent: true, direction: 'center', className: 'draw-label' });
-  saveDrawings();
+
+function drawClickHandler(e) {
+  if (!drawMode) return;
+  if (measureActive || pinMode) return; // Andere Modi haben Vorrang
+  L.DomEvent.stopPropagation(e);
+  const ll = e.latlng;
+
+  if (drawMode === 'point') {
+    const label = prompt('Beschriftung (optional):', '');
+    const m = L.circleMarker(ll, { radius:8, color:'#ffc83d', fillColor:'#ffc83d', fillOpacity:0.85, weight:2 });
+    m.feature = { type:'Feature', properties:{ label: label||'' }, geometry:{ type:'Point', coordinates:[ll.lng, ll.lat] }};
+    if (label) m.bindTooltip(label, { permanent:true, direction:'top', className:'draw-label' });
+    drawnItems.addLayer(m);
+    saveDrawings();
+    drawPoints = [];
+    return;
+  }
+
+  drawPoints.push(ll);
+  redrawPreview();
+
+  if (drawMode === 'rect' && drawPoints.length === 2) {
+    finishDrawing();
+  }
+  if (drawMode === 'circle' && drawPoints.length === 2) {
+    finishDrawing();
+  }
 }
+
+function drawDblClickHandler(e) {
+  L.DomEvent.stopPropagation(e);
+  L.DomEvent.preventDefault(e);
+  if (drawMode === 'line' && drawPoints.length >= 2) finishDrawing();
+  else if (drawMode === 'polygon' && drawPoints.length >= 3) finishDrawing();
+}
+
+function redrawPreview() {
+  if (drawPreviewLayer) { map.removeLayer(drawPreviewLayer); drawPreviewLayer = null; }
+  if (!drawPoints.length) return;
+  const style = { color:'#ffc83d', weight:3, dashArray:'5 5', fillOpacity:0.2, fillColor:'#ffc83d' };
+  if (drawMode === 'line') {
+    drawPreviewLayer = L.polyline(drawPoints, style).addTo(map);
+  } else if (drawMode === 'polygon') {
+    drawPreviewLayer = L.polyline(drawPoints, style).addTo(map);
+  } else if (drawMode === 'rect' && drawPoints.length === 2) {
+    drawPreviewLayer = L.rectangle([drawPoints[0], drawPoints[1]], style).addTo(map);
+  } else if (drawMode === 'circle' && drawPoints.length === 2) {
+    const r = drawPoints[0].distanceTo(drawPoints[1]);
+    drawPreviewLayer = L.circle(drawPoints[0], { radius: r, ...style }).addTo(map);
+  }
+}
+
+function finishDrawing() {
+  if (!drawPoints.length || !drawMode) {
+    drawPoints = [];
+    if (drawPreviewLayer) { map.removeLayer(drawPreviewLayer); drawPreviewLayer = null; }
+    return;
+  }
+  const label = prompt('Beschriftung für diese Zeichnung (optional):', '') || '';
+  const style = { color:'#ffc83d', weight:3, fillOpacity:0.25, fillColor:'#ffc83d' };
+  let layer;
+  let geom;
+  if (drawMode === 'line') {
+    layer = L.polyline(drawPoints, style);
+    geom = { type:'LineString', coordinates: drawPoints.map(ll => [ll.lng, ll.lat]) };
+  } else if (drawMode === 'polygon') {
+    layer = L.polygon(drawPoints, style);
+    geom = { type:'Polygon', coordinates: [drawPoints.map(ll => [ll.lng, ll.lat])] };
+  } else if (drawMode === 'rect' && drawPoints.length === 2) {
+    layer = L.rectangle([drawPoints[0], drawPoints[1]], style);
+    const a = drawPoints[0], b = drawPoints[1];
+    geom = { type:'Polygon', coordinates: [[[a.lng,a.lat],[b.lng,a.lat],[b.lng,b.lat],[a.lng,b.lat],[a.lng,a.lat]]] };
+  } else if (drawMode === 'circle' && drawPoints.length === 2) {
+    const r = drawPoints[0].distanceTo(drawPoints[1]);
+    layer = L.circle(drawPoints[0], { radius: r, ...style });
+    // Circle als Point mit radius-Property speichern
+    geom = { type:'Point', coordinates: [drawPoints[0].lng, drawPoints[0].lat] };
+    layer.feature = { type:'Feature', properties:{ label, radius: r, shape:'circle' }, geometry: geom };
+  }
+  if (layer) {
+    if (!layer.feature) layer.feature = { type:'Feature', properties:{ label }, geometry: geom };
+    if (label) layer.bindTooltip(label, { permanent:true, direction:'center', className:'draw-label' });
+    drawnItems.addLayer(layer);
+    saveDrawings();
+  }
+  drawPoints = [];
+  if (drawPreviewLayer) { map.removeLayer(drawPreviewLayer); drawPreviewLayer = null; }
+}
+
 async function saveDrawings() {
   if (!activeProject) return;
-  const geojson = drawnItems.toGeoJSON();
-  await saveProject({ drawings: geojson });
+  const features = [];
+  drawnItems.eachLayer(l => {
+    if (l.feature) features.push(l.feature);
+  });
+  await saveProject({ drawings: { type:'FeatureCollection', features }});
 }
+
 document.getElementById('ptbDraw')?.addEventListener('click', toggleDrawing);
 document.getElementById('ptbClear')?.addEventListener('click', () => {
   if (!confirm('Alle Zeichnungen löschen?')) return;
