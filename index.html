@@ -87,7 +87,9 @@
     <div class="toast" id="toast"></div>
     <div id="ctxMenu" class="ctx-menu">
       <div class="ctx-coord" id="ctxCoord"></div>
-      <div class="ctx-item" data-act="ai">🤖 KI-Analyse dieser Region</div>
+      <div class="ctx-item" data-act="profile">🌍 Land-Vollprofil öffnen</div>
+      <div class="ctx-item" data-act="compare">➕ Zum Vergleich</div>
+      <div class="ctx-item" data-act="ai">💬 KI-Chat zu dieser Region</div>
       <div class="ctx-item" data-act="pin">📌 Pin hier setzen</div>
       <div class="ctx-item" data-act="measure">📏 Distanz von hier messen</div>
       <div class="ctx-item" data-act="copy">📋 Koordinaten kopieren</div>
@@ -159,6 +161,34 @@
     <input type="file" id="importPinsFile" accept=".json" style="display:none">
   </div>
   <div id="pinList" style="flex:1;overflow-y:auto;padding:8px 0"></div>
+</div>
+
+<!-- Großes zentriertes Land-Dossier-Popup -->
+<div id="countryDossierModal" class="modal">
+  <div class="modal-box dossier-box">
+    <div class="dossier-head">
+      <div class="dossier-head-main">
+        <div class="dossier-flag" id="cdFlag"></div>
+        <div>
+          <h2 id="cdName">Land</h2>
+          <div class="dossier-meta" id="cdMeta"></div>
+        </div>
+      </div>
+      <div class="dossier-actions">
+        <button class="tb-btn" id="cdAiUpdate" title="Daten aktualisieren">🤖 KI-Update</button>
+        <button class="tb-btn" id="cdToCompare">＋ Vergleich</button>
+        <button class="tb-btn" id="cdAiChat">💬 Chat</button>
+        <button class="closeBtn" data-close="countryDossierModal">×</button>
+      </div>
+    </div>
+    <div class="dossier-tabs" id="cdTabs">
+      <button class="dossier-tab active" data-tab="overview">📋 Übersicht</button>
+      <button class="dossier-tab" data-tab="dossier">📊 AI-Dossier</button>
+      <button class="dossier-tab" data-tab="documents">📄 Dokumente</button>
+      <button class="dossier-tab" data-tab="connections">🔗 Verbindungen</button>
+    </div>
+    <div class="dossier-body" id="cdBody"></div>
+  </div>
 </div>
 
 <!-- Dokument-Anzeige-Modal -->

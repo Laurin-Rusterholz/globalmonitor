@@ -536,22 +536,7 @@ function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
   return `<b>${title}</b><br>${html}<br><span class="tag" style="background:${tagColor}22;color:${tagColor}">${tagText}</span>${askBtn}${srcHtml}`;
 }
 
-// Auto-Update der Region beim Öffnen jedes Marker-Popups
-// (sonst zeigt das Country-Panel weiter ein vorher gewähltes Land)
-map.on('popupopen', (e) => {
-  const pop = e.popup;
-  const ll = pop.getLatLng();
-  if (!ll) return;
-  // Nur wenn AI-Panel offen ist (sonst nervt es)
-  if (!document.getElementById('ai').classList.contains('open')) return;
-  // Wenn der aktuelle currentRegion bereits sehr nahe ist, nicht neu laden
-  if (currentRegion && Math.abs(+currentRegion.lat - ll.lat) < 0.3 && Math.abs(+currentRegion.lng - ll.lng) < 0.3) return;
-  // Title aus Popup-Content extrahieren
-  const html = pop.getContent();
-  const titleMatch = typeof html === 'string' ? html.match(/<b>([^<]+)<\/b>/) : null;
-  const name = titleMatch ? titleMatch[1] : null;
-  openRegion(ll.lat, ll.lng, name);
-});
+// Auto-Update entfernt - User klickt explizit "→ Land öffnen" im Popup
 
 function renderStatic() {
   // Pipelines
@@ -1147,9 +1132,10 @@ window.askAboutRegion = function(lat, lng, name) {
 };
 
 map.on('click', async e => {
-  if (measureActive) return; // im Mess-Modus keine Region öffnen
-  if (pinMode) return;       // im Pin-Modus keine Region öffnen
-  openRegion(e.latlng.lat, e.latlng.lng);
+  if (measureActive) return; // im Mess-Modus
+  if (pinMode) return;       // im Pin-Modus
+  // Linksklick auf Karte öffnet KEIN Land mehr automatisch.
+  // Nutze Rechtsklick (Kontextmenü) oder Klick auf Polygon (Aktions-Popup).
 });
 
 async function openRegion(lat, lng, presetName, presetIso) {
@@ -1302,6 +1288,7 @@ function renderCountryInfo(iso2, profile, economic, live) {
       <div class="ci-hero-meta">${heroMeta.join(' · ')||'&nbsp;'}</div>
     </div>
     <div class="ci-hero-tools">
+      <button id="ciOpenPopupBtn" title="Vollständiges Land-Popup öffnen" style="background:var(--accent);color:#000;border-color:var(--accent)">📋 Vollprofil</button>
       <button id="ciAiUpdateBtn" title="Via KI aktualisieren">🤖 KI-Update</button>
       <button id="ciCompareBtn" title="Zum Vergleich hinzufügen">${inBasket?'✓ Im Vergleich':'＋ Vergleich'}</button>
     </div>
@@ -1390,6 +1377,7 @@ function renderCountryInfo(iso2, profile, economic, live) {
 
   ciDiv.innerHTML = html;
   ciDiv.classList.add('show');
+  document.getElementById('ciOpenPopupBtn')?.addEventListener('click', () => window.openCountryDossier(iso2, name));
   document.getElementById('ciAiUpdateBtn')?.addEventListener('click', () => doAiUpdate(iso2));
   document.getElementById('ciCompareBtn')?.addEventListener('click', () => toggleCompareCountry(iso2, name));
   ['dosFull','dosTrade','dosMil','dosRole'].forEach(id => {
@@ -1883,6 +1871,9 @@ function countryColor(iso, mode) {
   return '#444';
 }
 
+let selectedCountryIso = null;
+let selectedCountryLayer = null;
+
 function buildPoliticalLayer(mode) {
   if (!countriesGeoJson) return null;
   const layer = L.geoJSON(countriesGeoJson, {
@@ -1896,13 +1887,61 @@ function buildPoliticalLayer(mode) {
       const name = profile?.name || f.properties?.NAME || f.properties?.name || iso || '?';
       l.on('click', (e) => {
         L.DomEvent.stopPropagation(e);
-        openRegion(e.latlng.lat, e.latlng.lng, name, iso);
+        // Shift+Klick: direkt zum Vergleich hinzufügen
+        if (e.originalEvent?.shiftKey) {
+          toggleCompareCountry(iso, name);
+          highlightCountry(iso, l);
+          return;
+        }
+        // Normaler Klick: nur highlighten + Aktions-Popup
+        highlightCountry(iso, l);
+        showCountryActionPopup(e.latlng, iso, name);
       });
       l.bindTooltip(name, { sticky: true, direction: 'top', className: 'leaflet-tooltip' });
     }
   });
   return layer;
 }
+
+function highlightCountry(iso, layer) {
+  // Vorherige Auswahl zurücksetzen
+  if (selectedCountryLayer) {
+    try { selectedCountryLayer.setStyle({ weight: 0.6, color: '#0c1117' }); } catch {}
+  }
+  selectedCountryIso = iso;
+  selectedCountryLayer = layer;
+  try {
+    layer.setStyle({ weight: 3, color: '#21c7d6' });
+    layer.bringToFront();
+  } catch {}
+}
+
+function showCountryActionPopup(latlng, iso, name) {
+  const flag = flagEmoji(iso);
+  const inBasket = comparedCountries.some(c => c.iso === iso);
+  const html = `<div class="cap-inner">
+    <div class="cap-head"><span class="cap-flag">${flag}</span><span class="cap-name">${escapeHtml(name)}</span></div>
+    <div class="cap-btns">
+      <button onclick="window.openCountryDossier('${iso}','${name.replace(/'/g,"\\'")}')">📋 Vollständiges Profil</button>
+      <button onclick="window.toggleCompareCountry('${iso}','${name.replace(/'/g,"\\'")}')">${inBasket?'✓ Im Vergleich':'➕ Zum Vergleich'}</button>
+      <button onclick="window.openCountryChat(${latlng.lat},${latlng.lng},'${name.replace(/'/g,"\\'")}','${iso}')">💬 KI-Chat</button>
+      <button onclick="window.generateQuickDossier('${iso}','${name.replace(/'/g,"\\'")}','military')">🛡 Militär-Analyse</button>
+    </div>
+  </div>`;
+  L.popup({ className: 'country-action-popup', closeButton: true, autoPan: true })
+    .setLatLng(latlng)
+    .setContent(html)
+    .openOn(map);
+}
+
+window.openCountryChat = function(lat, lng, name, iso) {
+  map.closePopup();
+  openRegion(lat, lng, name, iso);
+};
+window.generateQuickDossier = function(iso, name, scope) {
+  map.closePopup();
+  openCountryDossier(iso, name, scope);
+};
 
 async function activatePoliticalMap() {
   await ensureCountriesGeoJson();
@@ -2428,6 +2467,29 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(item => {
     const act = item.dataset.act;
     hideCtxMenu();
     switch (act) {
+      case 'profile': {
+        // Reverse-Geocode für ISO, dann Dossier öffnen
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=5&accept-language=de`);
+          const d = await r.json();
+          const iso = d.address?.country_code?.toUpperCase();
+          const name = d.address?.country;
+          if (iso) window.openCountryDossier(iso, name);
+          else toast('Kein Land an dieser Stelle');
+        } catch { toast('Land-Erkennung fehlgeschlagen'); }
+        break;
+      }
+      case 'compare': {
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=5&accept-language=de`);
+          const d = await r.json();
+          const iso = d.address?.country_code?.toUpperCase();
+          const name = d.address?.country;
+          if (iso) toggleCompareCountry(iso, name||iso);
+          else toast('Kein Land an dieser Stelle');
+        } catch { toast('Land-Erkennung fehlgeschlagen'); }
+        break;
+      }
       case 'ai':
         openRegion(lat, lng);
         break;
@@ -2463,6 +2525,361 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(item => {
         break;
     }
   };
+});
+
+/* ════════════════════════════════════════════════════════════════
+   LAND-DOSSIER-MODAL (großes zentriertes Popup mit Tabs)
+   ════════════════════════════════════════════════════════════════ */
+let dossierState = { iso: null, name: null, profile: null, live: null, economic: null, tab: 'overview', initialScope: null };
+
+window.openCountryDossier = async function(iso, name, initialScope) {
+  iso = (iso || '').toUpperCase();
+  if (!iso) return;
+  const profile = window.getCountryProfile?.(iso);
+  dossierState = {
+    iso, name: name || profile?.name || iso,
+    profile, live: null, economic: null,
+    tab: initialScope ? 'dossier' : 'overview',
+    initialScope
+  };
+
+  // Modal sofort öffnen mit Loading-State
+  const modal = document.getElementById('countryDossierModal');
+  document.getElementById('cdFlag').textContent = flagEmoji(iso);
+  document.getElementById('cdName').textContent = dossierState.name;
+  document.getElementById('cdMeta').textContent = 'Lade Wikidata + World Bank…';
+  document.getElementById('cdBody').innerHTML = '<div style="text-align:center;padding:40px;color:var(--ink-dim)">Lade Daten…</div>';
+  modal.classList.add('open');
+  // Tab-Buttons setzen
+  document.querySelectorAll('.dossier-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === dossierState.tab);
+  });
+
+  // Daten parallel laden
+  const [live, economic] = await Promise.all([fetchWikidata(iso), fetchEconomic(iso)]);
+  dossierState.live = live;
+  dossierState.economic = economic;
+
+  // Meta-Zeile aktualisieren
+  const meta = [];
+  if (live?.capital) meta.push(live.capital);
+  if (live?.continent) meta.push(live.continent);
+  if (live?.iso3) meta.push('ISO ' + live.iso3);
+  if (live?.callingCode) meta.push('+' + live.callingCode);
+  document.getElementById('cdMeta').textContent = meta.join(' · ');
+
+  renderDossierTab();
+  if (initialScope) generateDossierIn(iso, dossierState.name, initialScope);
+};
+
+document.querySelectorAll('.dossier-tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.dossier-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    dossierState.tab = tab.dataset.tab;
+    renderDossierTab();
+  };
+});
+
+function renderDossierTab() {
+  const body = document.getElementById('cdBody');
+  const tab = dossierState.tab;
+  if (tab === 'overview') renderOverviewTab(body);
+  else if (tab === 'dossier') renderDossierGenTab(body);
+  else if (tab === 'documents') renderDocumentsTab(body);
+  else if (tab === 'connections') renderConnectionsTab(body);
+}
+
+function renderOverviewTab(body) {
+  const { iso, profile, live, economic } = dossierState;
+  let html = '';
+
+  // Stat-Tiles
+  html += `<div class="dossier-stats">
+    <div class="dossier-stat"><div class="dossier-stat-label">Bevölkerung</div><div class="dossier-stat-val">${fmtNum(economic?.population || live?.population)}</div><div class="dossier-stat-sub">${economic?.population?'World Bank':'Wikidata'}</div></div>
+    <div class="dossier-stat"><div class="dossier-stat-label">BIP</div><div class="dossier-stat-val">${fmtMoney(economic?.gdp)}</div><div class="dossier-stat-sub">World Bank</div></div>
+    <div class="dossier-stat"><div class="dossier-stat-label">BIP/Kopf</div><div class="dossier-stat-val">${fmtMoney(economic?.gdpPerCapita)}</div><div class="dossier-stat-sub">USD</div></div>
+    <div class="dossier-stat"><div class="dossier-stat-label">Fläche</div><div class="dossier-stat-val">${fmtArea(live?.area)}</div><div class="dossier-stat-sub">km²</div></div>
+    <div class="dossier-stat"><div class="dossier-stat-label">Mil.-Ausgaben</div><div class="dossier-stat-val">${economic?.militaryPct?economic.militaryPct.toFixed(2)+'%':'–'}</div><div class="dossier-stat-sub">vom BIP</div></div>
+    <div class="dossier-stat"><div class="dossier-stat-label">Lebenserw.</div><div class="dossier-stat-val">${economic?.lifeExp?economic.lifeExp.toFixed(1)+'J':'–'}</div><div class="dossier-stat-sub">Jahre</div></div>
+  </div>`;
+
+  html += `<div class="dossier-grid">`;
+
+  // Politik-Karte
+  html += `<div class="dossier-card"><h4>Politik & Staat ${srcBadge('live')}</h4>`;
+  if (live?.capital || profile?.capital) html += `<div class="ci-row"><span>Hauptstadt</span><b>${escapeHtml(live?.capital||profile.capital)}</b></div>`;
+  if (live?.govType || profile?.govType) html += `<div class="ci-row"><span>Regierungsform</span><b>${escapeHtml(live?.govType||profile.govType)}</b></div>`;
+  if (live?.headOfState) html += `<div class="ci-row ci-row-wide"><span>Staatsoberhaupt</span><b>${escapeHtml(fmtLeaderWithDate(live.headOfState,live.headOfStateStart))}</b></div>`;
+  else if (profile?.leader) html += `<div class="ci-row ci-row-wide"><span>Führung</span><b>${escapeHtml(profile.leader)}</b></div>`;
+  if (live?.headOfGovernment && live.headOfGovernment !== live.headOfState) html += `<div class="ci-row ci-row-wide"><span>Regierungschef</span><b>${escapeHtml(fmtLeaderWithDate(live.headOfGovernment,live.headOfGovernmentStart))}</b></div>`;
+  if (profile?.ruling) html += `<div class="ci-row ci-row-wide"><span>Regierungspartei</span><b>${escapeHtml(profile.ruling)}</b></div>`;
+  if (profile?.nextElection) html += `<div class="ci-row ci-row-wide"><span>Nächste Wahl</span><b>${escapeHtml(profile.nextElection)}</b></div>`;
+  html += `</div>`;
+
+  // Allianzen-Karte
+  if (profile?.alliances?.length || live?.memberships?.length) {
+    html += `<div class="dossier-card"><h4>Allianzen & Mitgliedschaften</h4>`;
+    if (profile?.alliances?.length) html += `<div class="ci-row ci-row-wide"><span>Hauptallianzen ${srcBadge('static')}</span><b>${profile.alliances.join(', ')}</b></div>`;
+    if (live?.memberships?.length) html += `<div class="ci-row ci-row-wide"><span>Internat. Org. ${srcBadge('live')}</span><b>${live.memberships.slice(0,12).join(', ')}</b></div>`;
+    html += `</div>`;
+  }
+
+  // Geografie & Gesellschaft
+  if (live?.area || live?.languages?.length || live?.borders?.length) {
+    html += `<div class="dossier-card"><h4>Geografie & Gesellschaft ${srcBadge('live')}</h4>`;
+    if (live.area) html += `<div class="ci-row"><span>Fläche</span><b>${fmtNum(live.area)} km²</b></div>`;
+    if (live.inception) html += `<div class="ci-row"><span>Gründung</span><b>${new Date(live.inception).getFullYear()}</b></div>`;
+    if (live.currency) html += `<div class="ci-row"><span>Währung</span><b>${escapeHtml(live.currency)}${live.currencyCode?` (${live.currencyCode})`:''}</b></div>`;
+    if (live.demonym) html += `<div class="ci-row"><span>Demonym</span><b>${escapeHtml(live.demonym)}</b></div>`;
+    if (live.languages?.length) html += `<div class="ci-row ci-row-wide"><span>Amtssprachen</span><b>${live.languages.join(', ')}</b></div>`;
+    if (live.religions?.length) html += `<div class="ci-row ci-row-wide"><span>Religionen</span><b>${live.religions.join(', ')}</b></div>`;
+    if (live.borders?.length) html += `<div class="ci-row ci-row-wide"><span>Nachbarn (${live.borders.length})</span><b>${live.borders.join(', ')}</b></div>`;
+    html += `</div>`;
+  }
+
+  // Kontext-Karte
+  if (profile?.context) {
+    html += `<div class="dossier-card"><h4>Aktueller Kontext ${srcBadge('static')}</h4>
+      <div style="line-height:1.6;color:var(--ink)">${escapeHtml(profile.context)}</div>
+      ${profile.notes?`<div style="margin-top:8px;font-size:11px;color:var(--ink-faint);font-style:italic">${escapeHtml(profile.notes)}</div>`:''}</div>`;
+  }
+
+  // Wirtschaft-Karte
+  if (economic) {
+    html += `<div class="dossier-card"><h4>Wirtschaft ${srcBadge('wb')}</h4>
+      <div class="ci-row"><span>BIP gesamt</span><b>${fmtMoney(economic.gdp)}</b></div>
+      <div class="ci-row"><span>BIP pro Kopf</span><b>${fmtMoney(economic.gdpPerCapita)}</b></div>
+      <div class="ci-row"><span>Militärausgaben</span><b>${economic.militaryPct?economic.militaryPct.toFixed(2)+'% BIP':'–'}</b></div>
+      <div class="ci-row"><span>Inflation</span><b>${economic.inflation?economic.inflation.toFixed(2)+'%':'–'}</b></div>
+    </div>`;
+  }
+
+  html += `</div>`;
+
+  if (live?.sourceUpdated) {
+    const date = new Date(live.sourceUpdated).toLocaleString('de-CH', {dateStyle:'medium', timeStyle:'short'});
+    html += `<div class="ci-source-note" style="margin-top:14px">Wikidata abgerufen: ${date}${live.fromCache?' (Cache)':''}</div>`;
+  }
+  body.innerHTML = html;
+}
+
+function renderDossierGenTab(body) {
+  const { iso, name } = dossierState;
+  let html = `<div class="dossier-source-banner">
+    <b>Datenquellen für AI-Dossiers:</b> Generiert von Claude (Anthropic, Modell claude-sonnet-4-6,
+    Wissensstand bis Anfang 2026), zusätzlich mit Live-Wikidata + World-Bank-Daten als Kontext gefüttert.
+    Die KI erstellt eine synthetisierte Analyse aus ihrem Trainingswissen. <b>Wichtig:</b> Aussagen zu militärischer
+    Doktrin, Truppenstärken oder aktuellen Entwicklungen sind Best-Effort-Schätzungen und können veralten.
+    Confidence-Score wird pro Dossier mitgeliefert.
+  </div>`;
+
+  html += `<div class="dossier-gen-row">
+    <button data-scope="full">📊 <b>Voll-Dossier</b><small>Alle Themen, ausführlich</small></button>
+    <button data-scope="trade">📦 <b>Handel & Wirtschaft</b><small>Industrien, Partner, Verflechtungen</small></button>
+    <button data-scope="military">🛡 <b>Militär-Analyse</b><small>Stärke, Doktrin, Brennpunkte</small></button>
+    <button data-scope="role">🌐 <b>Globale Rolle</b><small>Regional + global</small></button>
+  </div>`;
+  html += `<div id="cdDossierResult"></div>`;
+  body.innerHTML = html;
+
+  body.querySelectorAll('.dossier-gen-row button').forEach(b => {
+    b.onclick = () => generateDossierIn(iso, name, b.dataset.scope);
+  });
+}
+
+async function generateDossierIn(iso, name, scope) {
+  const target = document.getElementById('cdDossierResult');
+  if (!target) return;
+  target.innerHTML = `<div style="padding:30px;text-align:center;color:var(--ink-dim)">
+    <div style="font-size:24px;margin-bottom:10px">⏳</div>
+    Claude generiert ${scope}-Dossier für ${escapeHtml(name)}…<br>
+    <small style="font-size:10px;color:var(--ink-faint)">Mit aktuellen Wikidata- und Wirtschaftsdaten als Kontext. Kann 15-30s dauern.</small>
+  </div>`;
+
+  try {
+    const ctx = { profile: dossierState.profile, live: dossierState.live, economic: dossierState.economic };
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/dossier`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ iso, countryName: name, scope, context: ctx, save: true })
+    });
+    if (!res.ok) throw new Error('HTTP '+res.status);
+    const d = await res.json();
+    if (d.error) throw new Error(d.error);
+    renderInlineDossier(target, d);
+    toast('Dossier gespeichert');
+  } catch (e) {
+    target.innerHTML = `<div style="padding:20px;color:var(--conflict)">Fehler: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderInlineDossier(target, d) {
+  const labels = {profile:'Politisches Profil',economy:'Wirtschaft',industries:'Kernindustrien',trade:'Handelspartner',military:'Militärische Stärke',doctrine:'Militärische Doktrin',regionalRole:'Rolle in der Region',globalRole:'Globale Rolle',hotspots:'Brennpunkte'};
+  let html = '';
+  if (d.summary) html += `<div class="doc-summary">${escapeHtml(d.summary)}</div>`;
+  if (d.sections) {
+    Object.entries(d.sections).forEach(([k,v]) => {
+      html += `<div class="doc-section"><h3>${labels[k]||k}</h3><div>${markdownish(v)}</div></div>`;
+    });
+  }
+  if (d.keyFacts) {
+    const kf = d.keyFacts;
+    html += `<div class="doc-section"><h3>Key Facts</h3><div class="doc-kf">`;
+    if (kf.industries?.length) html += `<div><b>Industrien:</b> ${kf.industries.join(', ')}</div>`;
+    if (kf.tradePartners?.export?.length) html += `<div><b>Exportpartner:</b> ${kf.tradePartners.export.join(', ')}</div>`;
+    if (kf.tradePartners?.import?.length) html += `<div><b>Importpartner:</b> ${kf.tradePartners.import.join(', ')}</div>`;
+    if (kf.militaryActive) html += `<div><b>Aktive Soldaten:</b> ${kf.militaryActive}</div>`;
+    if (kf.militaryBudget) html += `<div><b>Mil-Budget:</b> ${kf.militaryBudget}</div>`;
+    if (kf.nuclearWeapons) html += `<div><b>Atomwaffen:</b> ${kf.nuclearWeapons}</div>`;
+    if (kf.majorAllies?.length) html += `<div><b>Hauptverbündete:</b> ${kf.majorAllies.join(', ')}</div>`;
+    if (kf.majorAdversaries?.length) html += `<div><b>Hauptgegner:</b> ${kf.majorAdversaries.join(', ')}</div>`;
+    html += `</div></div>`;
+  }
+  if (d.confidence) html += `<div class="doc-confidence">Confidence: <b>${d.confidence}</b> · ${escapeHtml(d.sourceNote||'')}</div>`;
+  target.innerHTML = html;
+}
+
+async function renderDocumentsTab(body) {
+  const { iso, name } = dossierState;
+  body.innerHTML = `<div style="margin-bottom:14px;display:flex;gap:9px">
+    <button class="tb-btn" id="cdNewNote">✏ Neue Notiz</button>
+    <span style="font-size:11px;color:var(--ink-dim);align-self:center">Notizen werden in Netlify Blobs gespeichert (persistent, gerätübergreifend).</span>
+  </div>
+  <div id="cdDocList">Lade…</div>`;
+  document.getElementById('cdNewNote').onclick = () => openNoteModal(iso, name);
+
+  if (!CONFIG.USE_BACKEND) {
+    document.getElementById('cdDocList').innerHTML = '<div class="conn-empty">Backend nicht aktiv</div>';
+    return;
+  }
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/notes?iso=${iso}`);
+    const data = await r.json();
+    const notes = data.notes || [];
+    if (!notes.length) {
+      document.getElementById('cdDocList').innerHTML = '<div class="conn-empty">Noch keine Dokumente. Generiere ein AI-Dossier oder erstelle eine Notiz.</div>';
+      return;
+    }
+    document.getElementById('cdDocList').innerHTML = notes.map(n => {
+      const typeBadge = n.type === 'ai-dossier' ? 'AI' : (n.type === 'ai-snapshot' ? 'KI' : 'Notiz');
+      const typeClass = n.type === 'ai-dossier' ? 'src-ai' : 'src-static';
+      return `<div class="doc-item" data-id="${n.id}">
+        <div class="doc-head">
+          <span class="doc-title">${escapeHtml(n.title)}</span>
+          <span class="src-badge ${typeClass}">${typeBadge}</span>
+        </div>
+        <div class="doc-meta">${new Date(n.created).toLocaleString('de-CH', {dateStyle:'medium', timeStyle:'short'})}</div>
+        <div class="doc-actions">
+          <button data-act="open" data-id="${n.id}">Öffnen</button>
+          <button data-act="del" data-id="${n.id}">Löschen</button>
+        </div>
+      </div>`;
+    }).join('');
+    document.querySelectorAll('#cdDocList button[data-act]').forEach(b => {
+      b.onclick = async () => {
+        if (b.dataset.act === 'open') openDocument(b.dataset.id);
+        if (b.dataset.act === 'del' && confirm('Dokument löschen?')) {
+          await fetch(`${CONFIG.BACKEND_BASE}/notes?id=${encodeURIComponent(b.dataset.id)}`, {method:'DELETE'});
+          renderDocumentsTab(body);
+        }
+      };
+    });
+  } catch (e) {
+    document.getElementById('cdDocList').innerHTML = `<div class="conn-empty">Fehler: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderConnectionsTab(body) {
+  const { iso, profile, live } = dossierState;
+  let html = `<div class="dossier-source-banner" style="border-left-color:var(--accent)">
+    <b>Verbindungen werden abgeleitet aus:</b> Allianzen-Mitgliedschaft (REF.actors),
+    Nachbarländer (Wikidata P47), Sanktionsregimen, geteilten internationalen Organisationen.
+    Handelspartner-Daten kommen aus AI-generierten Dossiers (falls vorhanden).
+  </div>`;
+
+  // Allies durch gemeinsame Allianzen
+  const allyMap = new Map();
+  if (R?.actors) {
+    R.actors.forEach(a => {
+      if (a.members?.includes(iso)) {
+        a.members.forEach(m => {
+          if (m === iso) return;
+          if (!allyMap.has(m)) allyMap.set(m, []);
+          allyMap.get(m).push(a.n);
+        });
+      }
+    });
+  }
+  const allies = [...allyMap.entries()].sort((a,b) => b[1].length - a[1].length);
+
+  // Nachbarn
+  const neighbors = live?.borders || [];
+
+  // Sanktionen-Bezug
+  const sanctionedByGroup = R?.sanctions?.filter(s => {
+    const p = window.getCountryProfile?.(iso);
+    return p?.alliances?.some(a => s.regime?.includes(a));
+  }) || [];
+
+  // Section: Verbündete
+  html += `<div class="conn-section"><h4>🤝 Verbündete via gemeinsame Allianzen (${allies.length})</h4>`;
+  if (allies.length) {
+    html += `<div class="conn-list">`;
+    allies.slice(0, 30).forEach(([ciso, alliances]) => {
+      const cName = window.getCountryProfile?.(ciso)?.name || ciso;
+      html += `<div class="conn-chip conn-ally" onclick="window.openCountryDossier('${ciso}','${cName.replace(/'/g,"\\'")}')"><span class="fl">${flagEmoji(ciso)}</span>${escapeHtml(cName)} <small style="color:var(--ink-faint)">(${alliances.join(', ')})</small></div>`;
+    });
+    html += `</div>`;
+  } else html += `<div class="conn-empty">Keine bekannten Allianzen-Partner</div>`;
+  html += `</div>`;
+
+  // Section: Nachbarn
+  html += `<div class="conn-section"><h4>🌐 Nachbarländer (${neighbors.length}) ${srcBadge('live')}</h4>`;
+  if (neighbors.length) {
+    html += `<div class="conn-list">`;
+    neighbors.forEach(n => {
+      html += `<div class="conn-chip conn-shared">${escapeHtml(n)}</div>`;
+    });
+    html += `</div>`;
+  } else html += `<div class="conn-empty">Keine Landgrenzen (Inselstaat?)</div>`;
+  html += `</div>`;
+
+  // Section: AI-Trade-Partner aus letztem Dossier
+  html += `<div class="conn-section"><h4>📦 Handelspartner (aus AI-Dossier)</h4>
+    <div class="conn-empty">Generiere ein "Handel & Wirtschaft"-Dossier im Tab AI-Dossier, dann erscheinen hier die wichtigsten Handelspartner.</div>`;
+  html += `</div>`;
+
+  // Section: Sanktionen-Bezug
+  if (profile?.alliances?.some(a => ['EU','NATO','G7'].includes(a))) {
+    html += `<div class="conn-section"><h4>⚠ Sanktionierte Staaten im westlichen Sanktionsregime</h4>
+      <div class="conn-list">`;
+    (R?.sanctions||[]).filter(s => s.regime?.match(/EU|US|UK|G7/)).slice(0,10).forEach(s => {
+      html += `<div class="conn-chip conn-adversary">${escapeHtml(s.n)} <small style="color:var(--ink-faint)">${escapeHtml(s.regime||'')}</small></div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  body.innerHTML = html;
+}
+
+// Dossier-Modal-Action-Buttons
+document.getElementById('cdAiUpdate')?.addEventListener('click', async () => {
+  if (!dossierState.iso) return;
+  currentRegion = currentRegion || {};
+  currentRegion.iso2 = dossierState.iso;
+  currentRegion.name = dossierState.name;
+  currentRegion.profile = dossierState.profile;
+  await doAiUpdate(dossierState.iso);
+});
+document.getElementById('cdToCompare')?.addEventListener('click', () => {
+  if (!dossierState.iso) return;
+  toggleCompareCountry(dossierState.iso, dossierState.name);
+});
+document.getElementById('cdAiChat')?.addEventListener('click', () => {
+  document.getElementById('countryDossierModal').classList.remove('open');
+  // Koordinaten holen (Country-Center aus Daten oder default)
+  const c = R?.countryCenters?.[dossierState.iso] || [0,0];
+  openRegion(c[0], c[1], dossierState.name, dossierState.iso);
 });
 
 /* ════════════════════════════════════════════════════════════════

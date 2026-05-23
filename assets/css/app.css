@@ -224,6 +224,90 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-siz
 .doc-confidence{font-size:10px;color:var(--ink-faint);font-style:italic;margin-top:8px;padding-top:8px;
   border-top:1px dashed var(--line)}
 
+/* ════ LAND-DOSSIER-MODAL (großes zentriertes Popup) ════ */
+.dossier-box{width:min(95vw,1200px);max-width:1200px;max-height:92vh;display:flex;flex-direction:column}
+.dossier-head{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;
+  justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap;
+  background:linear-gradient(180deg,var(--panel-2),var(--panel));position:relative}
+.dossier-head::after{content:"";position:absolute;top:-20%;right:-5%;width:280px;height:180px;
+  background:radial-gradient(circle,rgba(33,199,214,.12),transparent 70%);pointer-events:none}
+.dossier-head-main{display:flex;gap:14px;align-items:center;z-index:2;position:relative;flex:1;min-width:0}
+.dossier-flag{font-size:54px;line-height:1;flex:0 0 auto}
+.dossier-head h2{font-family:var(--font-display);font-size:22px;color:var(--ink);line-height:1.1;margin-bottom:4px}
+.dossier-meta{font-size:11px;color:var(--ink-faint);letter-spacing:.04em;line-height:1.5}
+.dossier-actions{display:flex;gap:7px;align-items:flex-start;z-index:2;position:relative;flex-wrap:wrap}
+.dossier-tabs{display:flex;gap:0;padding:0 22px;border-bottom:1px solid var(--line);background:var(--panel);
+  overflow-x:auto}
+.dossier-tabs::-webkit-scrollbar{height:0}
+.dossier-tab{background:none;border:none;color:var(--ink-dim);padding:11px 16px;cursor:pointer;
+  font-family:inherit;font-size:12.5px;border-bottom:2px solid transparent;white-space:nowrap;letter-spacing:.02em}
+.dossier-tab:hover{color:var(--ink)}
+.dossier-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.dossier-body{flex:1;overflow-y:auto;padding:20px 22px}
+.dossier-body::-webkit-scrollbar{width:8px}
+.dossier-body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:4px}
+
+/* Overview-Tab */
+.dossier-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px}
+.dossier-stat{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;text-align:center}
+.dossier-stat-label{font-size:9.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px}
+.dossier-stat-val{font-family:var(--font-display);font-size:18px;color:var(--ink);line-height:1.2}
+.dossier-stat-sub{font-size:9px;color:var(--ink-dim);margin-top:2px}
+
+.dossier-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+.dossier-card{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:14px}
+.dossier-card h4{font-family:var(--font-display);font-size:13px;color:var(--accent);margin-bottom:9px;
+  padding-bottom:6px;border-bottom:1px solid var(--line);text-transform:uppercase;letter-spacing:.06em}
+.dossier-card .ci-row{padding:4px 0}
+.dossier-card .ci-row-wide{flex-direction:column;align-items:flex-start;gap:2px}
+
+/* AI-Dossier-Tab */
+.dossier-source-banner{background:linear-gradient(90deg,rgba(255,200,61,.12),transparent);
+  border-left:3px solid var(--protest);padding:10px 14px;border-radius:0 6px 6px 0;margin-bottom:14px;
+  font-size:11.5px;color:var(--ink-dim);line-height:1.55}
+.dossier-source-banner b{color:var(--protest);font-family:var(--font-display);font-weight:normal}
+
+.dossier-gen-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:9px;margin-bottom:18px}
+.dossier-gen-row button{background:var(--panel-2);border:1px solid var(--line-2);color:var(--ink);
+  border-radius:7px;padding:13px 12px;cursor:pointer;font-family:inherit;font-size:12px;text-align:left;
+  display:flex;flex-direction:column;gap:3px}
+.dossier-gen-row button:hover{border-color:var(--accent);background:var(--panel-3)}
+.dossier-gen-row button:disabled{opacity:.5;cursor:wait}
+.dossier-gen-row button b{font-family:var(--font-display);font-size:13px;color:var(--accent)}
+.dossier-gen-row button small{color:var(--ink-dim);font-size:10px}
+
+/* Connections-Tab */
+.conn-section{margin-bottom:20px}
+.conn-section h4{font-family:var(--font-display);font-size:14px;color:var(--accent);margin-bottom:9px;
+  display:flex;align-items:center;gap:8px}
+.conn-list{display:flex;flex-wrap:wrap;gap:7px}
+.conn-chip{background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:14px;padding:6px 12px;font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer}
+.conn-chip:hover{border-color:var(--accent)}
+.conn-chip.conn-ally{border-left:3px solid var(--choke)}
+.conn-chip.conn-adversary{border-left:3px solid var(--conflict)}
+.conn-chip.conn-trade{border-left:3px solid var(--accent)}
+.conn-chip.conn-shared{border-left:3px solid var(--protest)}
+.conn-chip .fl{font-size:13px}
+.conn-empty{padding:12px;text-align:center;color:var(--ink-faint);font-size:11px;
+  border:1px dashed var(--line);border-radius:7px}
+
+/* Country-Action-Popup (auf Polygon-Klick) */
+.country-action-popup .leaflet-popup-content-wrapper{background:var(--panel);border:1px solid var(--accent);
+  box-shadow:0 8px 28px rgba(33,199,214,.3)}
+.country-action-popup .leaflet-popup-content{margin:0;padding:0;width:auto !important}
+.country-action-popup .cap-inner{padding:12px;min-width:200px}
+.country-action-popup .cap-head{display:flex;gap:9px;align-items:center;margin-bottom:9px;padding-bottom:8px;
+  border-bottom:1px solid var(--line)}
+.country-action-popup .cap-flag{font-size:24px;line-height:1}
+.country-action-popup .cap-name{font-family:var(--font-display);font-size:14px;color:var(--ink)}
+.country-action-popup .cap-btns{display:flex;flex-direction:column;gap:5px}
+.country-action-popup .cap-btns button{background:var(--panel-2);border:1px solid var(--line-2);color:var(--ink);
+  border-radius:5px;padding:7px 11px;cursor:pointer;font-family:inherit;font-size:11.5px;text-align:left;display:flex;align-items:center;gap:8px}
+.country-action-popup .cap-btns button:hover{border-color:var(--accent);color:var(--accent)}
+
+/* Pin-Add-Modal --> Pin-Add-Modal */
+
 .ai-body{flex:1;overflow-y:auto;padding:16px 18px}
 .ai-body::-webkit-scrollbar{width:7px}
 .ai-body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:4px}
