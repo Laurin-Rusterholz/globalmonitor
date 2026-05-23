@@ -23,6 +23,7 @@
         <div class="basemap-btn active" data-base="dark">Dunkel</div>
         <div class="basemap-btn" data-base="sat">Esri-Sat</div>
         <div class="basemap-btn" data-base="nasa">NASA-Tag</div>
+        <div class="basemap-btn" data-base="nasahd">NASA-HD</div>
         <div class="basemap-btn" data-base="terrain">Vektor</div>
         <div class="basemap-btn" data-base="topo">Topo</div>
       </div>
@@ -54,7 +55,8 @@
         <input type="date" id="cmpLeftDate">
       </div>
       <select id="cmpLayer">
-        <option value="nasa">NASA VIIRS</option>
+        <option value="nasa">NASA VIIRS (täglich)</option>
+        <option value="nasahd">NASA HLS (30m, ~wöchentlich)</option>
         <option value="sentinel" disabled>Sentinel-2 Echtfarbe</option>
         <option value="sentinelFalse" disabled>Sentinel-2 Falschfarbe</option>
       </select>

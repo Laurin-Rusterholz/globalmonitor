@@ -28,19 +28,13 @@ function gibsDate(daysBack=1) {
   const d = new Date(Date.now() - daysBack * 86400000);
   return d.toISOString().slice(0, 10);
 }
-function gibsTileLayer(layerName, maxZoom=9) {
-  return L.tileLayer(
-    `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layerName}/default/${gibsDate(1)}/GoogleMapsCompatible_Level${maxZoom}/{z}/{y}/{x}.jpg`,
-    { attribution: '© NASA GIBS / VIIRS', maxZoom, tileSize:256 }
-  );
-}
-
 const bases = {
   dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
     {attribution:'© OSM, © CARTO', subdomains:'abcd', maxZoom:19}),
   sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     {attribution:'© Esri, Maxar, Earthstar', maxZoom:19}),
-  nasa: gibsTileLayer('VIIRS_SNPP_CorrectedReflectance_TrueColor', 9),
+  nasa: buildNasaLayer(gibsDate(1)),
+  nasahd: buildNasaHdLayer(gibsDate(7)),
   terrain: L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
     {attribution:'© OSM, © CARTO', subdomains:'abcd', maxZoom:19}),
   topo: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
@@ -53,7 +47,14 @@ let activeBaseKey = 'dark';
 function buildNasaLayer(date) {
   return L.tileLayer(
     `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
-    { attribution: '© NASA GIBS / VIIRS · ' + date, maxZoom: 9, tileSize: 256 }
+    { attribution: '© NASA GIBS / VIIRS · ' + date, maxZoom: 18, maxNativeZoom: 9, tileSize: 256 }
+  );
+}
+function buildNasaHdLayer(date) {
+  // HLS_S30 = Sentinel-2 Harmonized, 30m, weekly composite (Zoom bis 12)
+  return L.tileLayer(
+    `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/HLS_S30_Nadir_BRDF_Adjusted_Reflectance/default/${date}/GoogleMapsCompatible_Level12/{z}/{y}/{x}.jpg`,
+    { attribution: '© NASA HLS (Sentinel-2 harmonized) · ' + date, maxZoom: 18, maxNativeZoom: 12, tileSize: 256 }
   );
 }
 
@@ -115,7 +116,11 @@ function switchBase(key, btn) {
   if (key === 'sentinelFalse') bases.sentinelFalse = buildSentinelLayer('FALSE_COLOR');
   activeBase = bases[key].addTo(map);
   activeBase.bringToBack && activeBase.bringToBack();
-  document.getElementById('satDateRow').style.display = (key === 'nasa') ? 'flex' : 'none';
+  const sdRow = document.getElementById('satDateRow');
+  sdRow.style.display = (key === 'nasa' || key === 'nasahd') ? 'flex' : 'none';
+  // Bei HLS sinnvolles Default-Datum (1 Woche zurück, da nicht täglich verfügbar)
+  if (key === 'nasahd') document.getElementById('satDate').value = gibsDate(7);
+  if (key === 'nasa') document.getElementById('satDate').value = gibsDate(1);
 }
 // Bestehende Buttons auf switchBase umstellen
 document.querySelectorAll('.basemap-btn').forEach(b => { b.onclick = () => switchBase(b.dataset.base, b); });
@@ -129,10 +134,12 @@ if (satDateInput) {
   satDateInput.addEventListener('change', () => {
     const d = satDateInput.value;
     if (!d) return;
-    if (activeBaseKey === 'nasa') map.removeLayer(activeBase);
-    bases.nasa = buildNasaLayer(d);
-    if (activeBaseKey === 'nasa') {
-      activeBase = bases.nasa.addTo(map);
+    const isHd = activeBaseKey === 'nasahd';
+    if (activeBaseKey === 'nasa' || isHd) map.removeLayer(activeBase);
+    if (isHd) bases.nasahd = buildNasaHdLayer(d);
+    else bases.nasa = buildNasaLayer(d);
+    if (activeBaseKey === 'nasa' || isHd) {
+      activeBase = bases[activeBaseKey].addTo(map);
       activeBase.bringToBack && activeBase.bringToBack();
     }
   });
@@ -146,6 +153,7 @@ let cmpRightLayer = null;
 
 function makeCompareLayer(kind, date) {
   if (kind === 'nasa') return buildNasaLayer(date);
+  if (kind === 'nasahd') return buildNasaHdLayer(date);
   if (kind === 'sentinel') return buildSentinelLayer('TRUE_COLOR', date);
   if (kind === 'sentinelFalse') return buildSentinelLayer('FALSE_COLOR', date);
   return buildNasaLayer(date);
