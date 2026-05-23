@@ -15,6 +15,8 @@ const CONFIG = {
   PLANE_REFRESH_MS: 20000,
   SHIP_REFRESH_MS: 60000,
   CONFLICT_REFRESH_MS: 10 * 60 * 1000,
+  MIL_PLANE_REFRESH_MS: 30000,
+  FIRMS_REFRESH_MS: 30 * 60 * 1000,
 };
 
 const R = window.REF;
@@ -84,6 +86,9 @@ const LAYERS = {
   bri:         {n:'BRI-Projekte',        c:'#ffa83d', cat:'politics', on:false},
   // Luft
   planes:      {n:'Flugzeuge (Live)',    c:'#9fb3c8', cat:'air', on:false},
+  planesMil:   {n:'Militärflüge (Live)', c:'#ff7847', cat:'air', on:false},
+  // Live-Militär (Proxies)
+  thermal:     {n:'Thermal-Anomalien (FIRMS)', c:'#ff4d3d', cat:'liveMil', on:false},
 };
 
 // LayerGroups initialisieren
@@ -98,6 +103,7 @@ const CATEGORIES = [
   {id:'military',  n:'Militär',            ic:'🛡', open:false},
   {id:'politics',  n:'Politik & Wirtschaft', ic:'⚖', open:true},
   {id:'air',       n:'Luftraum',           ic:'✈', open:false},
+  {id:'liveMil',   n:'Live-Militär (OSINT)', ic:'⚡', open:true},
 ];
 
 function buildCategoryUI() {
@@ -147,8 +153,21 @@ function buildCategoryUI() {
       Object.entries(LAYERS).filter(([_,l]) => l.cat === b.dataset.cat).forEach(([key, l]) => {
         if (l.on !== target) {
           l.on = target;
-          if (target) { map.addLayer(l.group); if (key === 'planes') startPlanes(); if (key === 'ships') startShips(); if (key === 'quake') loadQuakes(); if (key === 'disaster') loadDisasters(); }
-          else { map.removeLayer(l.group); if (key === 'planes') stopPlanes(); if (key === 'ships') stopShips(); }
+          if (target) {
+            map.addLayer(l.group);
+            if (key === 'planes') startPlanes();
+            if (key === 'planesMil') startMilPlanes();
+            if (key === 'ships') startShips();
+            if (key === 'quake') loadQuakes();
+            if (key === 'disaster') loadDisasters();
+            if (key === 'thermal') startThermal();
+          } else {
+            map.removeLayer(l.group);
+            if (key === 'planes') stopPlanes();
+            if (key === 'planesMil') stopMilPlanes();
+            if (key === 'ships') stopShips();
+            if (key === 'thermal') stopThermal();
+          }
           const el = document.querySelector(`#cnt-${key}`)?.parentElement;
           if (el) el.classList.toggle('off', !target);
         }
@@ -164,13 +183,17 @@ function toggleLayer(key, el) {
   if (l.on) {
     map.addLayer(l.group);
     if (key === 'planes') startPlanes();
+    if (key === 'planesMil') startMilPlanes();
     if (key === 'ships') startShips();
     if (key === 'quake') loadQuakes();
     if (key === 'disaster') loadDisasters();
+    if (key === 'thermal') startThermal();
   } else {
     map.removeLayer(l.group);
     if (key === 'planes') stopPlanes();
+    if (key === 'planesMil') stopMilPlanes();
     if (key === 'ships') stopShips();
+    if (key === 'thermal') stopThermal();
   }
 }
 
@@ -445,6 +468,72 @@ function planeMarker(la, lo, heading, label, type) {
   L.marker([la, lo], {icon}).bindPopup(`<b>${label}</b><br>Kurs ${Math.round(heading)}°`).addTo(LAYERS.planes.group);
 }
 
+/* ════ LIVE: MILITÄRFLUGZEUGE (OpenSky-Filter) ════ */
+let milPlaneTimer = null;
+let milPlaneStore = [];
+function startMilPlanes() { loadMilPlanes(); milPlaneTimer = setInterval(loadMilPlanes, CONFIG.MIL_PLANE_REFRESH_MS); }
+function stopMilPlanes() { clearInterval(milPlaneTimer); }
+async function loadMilPlanes() {
+  LAYERS.planesMil.group.clearLayers();
+  milPlaneStore = [];
+  if (!CONFIG.USE_BACKEND) {
+    R.demoPlanes.filter(p => p.type === 'military').forEach(p => milPlaneMarker(p.la, p.lo, p.heading, p.callsign + ' (Demo)'));
+    setCnt('planesMil', 'demo');
+    return;
+  }
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/militaryplanes`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    (data.aircraft || []).forEach(a => {
+      milPlaneStore.push(a);
+      milPlaneMarker(a.la, a.lo, a.heading, a.callsign || a.icao, a);
+    });
+    setCnt('planesMil', (data.aircraft || []).length);
+  } catch (e) {
+    console.error('MilPlanes:', e);
+    setCnt('planesMil', '!');
+  }
+}
+function milPlaneMarker(la, lo, heading, label, meta) {
+  const icon = L.divIcon({className:'', html:`<div class="plane-icon military" style="transform:rotate(${heading}deg)">✈</div>`, iconSize:[18,18]});
+  const altTxt = meta?.alt ? `<br>Höhe: ${Math.round(meta.alt)} m` : '';
+  const velTxt = meta?.vel ? `<br>Geschw.: ${Math.round(meta.vel*3.6)} km/h` : '';
+  const ctyTxt = meta?.country ? `<br>Reg.-Land: ${meta.country}` : '';
+  L.marker([la, lo], {icon}).bindPopup(`<b>${label}</b><br>Kurs ${Math.round(heading)}°${altTxt}${velTxt}${ctyTxt}<br><span class="tag" style="background:#ff784722;color:#ff7847">Militärflug</span>`).addTo(LAYERS.planesMil.group);
+}
+
+/* ════ LIVE: THERMAL-ANOMALIEN (NASA FIRMS) ════ */
+let thermalTimer = null;
+let thermalStore = [];
+function startThermal() { loadThermal(); thermalTimer = setInterval(loadThermal, CONFIG.FIRMS_REFRESH_MS); }
+function stopThermal() { clearInterval(thermalTimer); }
+async function loadThermal() {
+  LAYERS.thermal.group.clearLayers();
+  thermalStore = [];
+  if (!CONFIG.USE_BACKEND) { setCnt('thermal', '–'); return; }
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/firms`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const fires = data.fires || [];
+    fires.forEach(f => {
+      thermalStore.push(f);
+      const r = Math.min(3 + (f.bright - 300) / 15, 9);
+      L.circleMarker([f.la, f.lo], {
+        radius: r, color: LAYERS.thermal.c, fillColor: LAYERS.thermal.c,
+        fillOpacity: .5, weight: 1
+      })
+      .bindPopup(popup(`🔥 Thermal-Anomalie`, `Helligkeit: <b>${Math.round(f.bright)}K</b><br>Konfidenz: ${f.conf}${f.region?`<br>Region: ${f.region}`:''}${f.date?`<br>Datum: ${f.date}`:''}`, LAYERS.thermal.c, data.demo ? 'FIRMS (Demo)' : 'FIRMS Live', f.la, f.lo))
+      .addTo(LAYERS.thermal.group);
+    });
+    setCnt('thermal', fires.length + (data.demo ? ' demo' : ''));
+  } catch (e) {
+    console.error('Thermal:', e);
+    setCnt('thermal', '!');
+  }
+}
+
 /* ════ LIVE: SCHIFFE ════ */
 let shipTimer = null;
 function startShips() {
@@ -583,6 +672,8 @@ function gatherContext(lat, lng) {
   return {
     conflicts: nearbyAny(lat, lng, conflictStore).map(c => `${c.n} (${c.i||''})`).slice(0, 8),
     actions: nearbyAny(lat, lng, R.militaryActions).map(a => `${a.n}: ${a.d}`).slice(0, 5),
+    milPlanes: nearbyAny(lat, lng, milPlaneStore, 1500).map(p => `${p.callsign||p.icao} (${p.country||'?'})`).slice(0, 10),
+    thermal: nearbyAny(lat, lng, thermalStore, 800).map(f => `${Math.round(f.bright)}K @ ${f.la.toFixed(1)},${f.lo.toFixed(1)}${f.region?' ['+f.region+']':''}`).slice(0, 10),
     chokes: nearbyAny(lat, lng, R.chokes, 1500).map(c => c.n),
     ports: nearbyAny(lat, lng, R.ports, 800).map(p => p.n),
     bases: nearbyAny(lat, lng, R.militaryBases, 1000).map(b => `${b.n} (${b.country})`).slice(0, 10),
@@ -688,6 +779,8 @@ function buildContextString() {
   const c = currentRegion.context || {};
   const lines = [];
   if (c.actions?.length) lines.push('AKTUELLE MILITÄRAKTIONEN: ' + c.actions.join('; '));
+  if (c.milPlanes?.length) lines.push('LIVE Militärflüge (gerade in der Luft): ' + c.milPlanes.join(', '));
+  if (c.thermal?.length) lines.push('THERMAL-ANOMALIEN (FIRMS, letzte 24-48h, Proxy für Kampf/Brand): ' + c.thermal.join('; '));
   if (c.conflicts?.length) lines.push('Konflikt-Ereignisse: ' + c.conflicts.join('; '));
   if (c.bases?.length) lines.push('Militärbasen in Reichweite: ' + c.bases.join('; '));
   if (c.exercises?.length) lines.push('Militärübungen: ' + c.exercises.join(', '));
