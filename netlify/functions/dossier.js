@@ -21,8 +21,9 @@ function getStoreSafe(name, opts = {}) {
   }
 }
 
-const PRIMARY_MODEL = 'claude-sonnet-4-6';
-const FALLBACK_MODELS = ['claude-sonnet-4-5', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-latest'];
+const PRIMARY_MODEL_FULL = 'claude-haiku-4-5-20251001';  // Haiku: 9 Sektionen passen in 22s
+const PRIMARY_MODEL_SMALL = 'claude-sonnet-4-6';         // Sonnet: bei 2-3 Sektionen ist Tiefe wichtiger
+const FALLBACK_MODELS = ['claude-sonnet-4-5', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'];
 
 const SECTIONS = {
   full: ['profile', 'economy', 'industries', 'trade', 'military', 'doctrine', 'regionalRole', 'globalRole', 'hotspots'],
@@ -76,10 +77,13 @@ exports.handler = async (event) => {
     const sections = SECTIONS[scope] || SECTIONS.full;
     const sectionList = sections.map((k) => `${k} (${SECTION_LABELS[k]})`).join(', ');
 
-    // Bei 'full' (9 Sektionen) reduzierte Wortzahl pro Sektion damit es in 22s
-    // passt. Für AUSFÜHRLICHERE Dossiers → /dossier-background mit Web-Recherche.
-    const wordsPerSection = scope === 'full' ? '130-200 Wörter' : '200-300 Wörter';
-    const maxTokens = scope === 'full' ? 3500 : 2500;
+    // 'full' (9 Sektionen) nutzt Haiku 4.5 (3× schneller als Sonnet → passt in 22s).
+    // Kleinere Scopes (2-3 Sektionen) nutzen Sonnet 4.6 für mehr Tiefe.
+    // Für vollständige Tiefe mit Sonnet + Web → 🔬 Tiefendossier (Background).
+    const isFull = scope === 'full';
+    const primaryModel = isFull ? PRIMARY_MODEL_FULL : PRIMARY_MODEL_SMALL;
+    const wordsPerSection = isFull ? '130-200 Wörter' : '250-350 Wörter';
+    const maxTokens = isFull ? 3500 : 2500;
 
     const sys = `Du bist geopolitischer Senior-Analyst. Liefere AUSSCHLIESSLICH JSON mit konkreten Zahlen, Namen, Daten. KEINE generischen Aussagen.
 
@@ -114,7 +118,7 @@ ${JSON.stringify(context, null, 2)}
 
 JSON liefern. Konkret mit Zahlen.`;
 
-    const modelChain = [PRIMARY_MODEL, ...FALLBACK_MODELS];
+    const modelChain = [primaryModel, ...FALLBACK_MODELS.filter(m => m !== primaryModel)];
     let lastErr = null, lastStatus = null, lastDetail = '';
     let dossier = null;
     let usedModel = null;

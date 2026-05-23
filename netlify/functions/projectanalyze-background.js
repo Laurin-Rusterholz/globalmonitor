@@ -125,12 +125,13 @@ Antworte AUSSCHLIESSLICH mit folgendem JSON-Schema (alle Felder ausfüllen, sehr
 }
 
 WICHTIG:
-- ISO-Codes immer 2-Buchstaben.
-- Länder max 25 (alle direkt+indirekt betroffenen).
-- Akteure max 10.
-- NIE generische Aussagen wie "wichtig für die Region". IMMER konkret mit Zahlen, Daten, Programmnamen, Beschluss-Nummern.
-- Nutze die Web-Suche AKTIV - mindestens 5-8 unterschiedliche Suchen für aktuelle Zahlen und Ereignisse.
-- Auf Deutsch antworten.`;
+- ISO-Codes 2-Buchstaben.
+- Länder max 18, Akteure max 8 (Token-Budget!).
+- pastActivities max 10, keyNumbers max 12, futureScenarios max 4, openQuestions max 10.
+- NIE generische Aussagen. IMMER konkret mit Zahlen/Programmen.
+- Web-Suche AKTIV nutzen (5-8 Suchen).
+- Auf Deutsch antworten.
+- KOMPAKTES JSON ohne unnötige Whitespaces - wichtiger dass es vollständig ist als dass es schön formatiert ist.`;
 
   const userMsg = `These: "${thesis}"
 ${baseCountries.length ? `Basis-Länder (vorgewählt): ${baseCountries.join(', ')}` : ''}${eventsContext}
@@ -150,12 +151,12 @@ Antworte AUSSCHLIESSLICH mit dem JSON-Schema. Sei AUSFÜHRLICH - das ist eine vo
 
   const reqBody = {
     model: 'claude-sonnet-4-6',
-    max_tokens: 12000,
+    max_tokens: 8000,
     system: sys,
     messages: [{ role: 'user', content: userMsg }],
   };
   if (webSearch) {
-    reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 10 }];
+    reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }];
   }
 
   try {
@@ -201,21 +202,83 @@ Antworte AUSSCHLIESSLICH mit dem JSON-Schema. Sei AUSFÜHRLICH - das ist eine vo
   return { statusCode: 200, body: '' };
 };
 
+// Reparatur für abgeschnittene JSON-Strings (häufig bei max_tokens-Limit):
+// Findet die letzte syntaktisch vollständige Stelle und schliesst offene
+// Strukturen. Verlustbehaftet aber besser als kompletter Fehler.
+function repairTruncatedJSON(s) {
+  let trimmed = s.trimEnd();
+  // Trailing-Komma + unvollständigen letzten Eintrag wegschneiden
+  // Strategie: vom Ende rückwärts den letzten vollständigen Eintrag finden
+  // (also letztes },  ],  oder Quote-balanciertes Token)
+  let depth = { brace: 0, bracket: 0 };
+  let inStr = false, esc = false;
+  let lastSafeIdx = -1;
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\') { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{') depth.brace++;
+    else if (c === '}') { depth.brace--; if (depth.brace >= 0 && depth.bracket === 0) lastSafeIdx = i; }
+    else if (c === '[') depth.bracket++;
+    else if (c === ']') { depth.bracket--; if (depth.brace === 0 && depth.bracket === 0) lastSafeIdx = i; }
+    else if (c === ',' && depth.brace === 1 && depth.bracket === 0) lastSafeIdx = i;
+  }
+  // Falls letztes safe-char ein Komma war, das nicht abschneiden sondern direkt nach
+  if (lastSafeIdx === -1) return trimmed; // nichts zu reparieren
+  let head = trimmed.slice(0, lastSafeIdx + 1).replace(/,\s*$/, '');
+  // Übrige offene Klammern aus head zählen und schliessen
+  let oBrace = 0, oBracket = 0, ins = false, es = false;
+  for (let i = 0; i < head.length; i++) {
+    const c = head[i];
+    if (es) { es = false; continue; }
+    if (c === '\\') { es = true; continue; }
+    if (c === '"') { ins = !ins; continue; }
+    if (ins) continue;
+    if (c === '{') oBrace++;
+    else if (c === '}') oBrace--;
+    else if (c === '[') oBracket++;
+    else if (c === ']') oBracket--;
+  }
+  while (oBracket > 0) { head += ']'; oBracket--; }
+  while (oBrace > 0) { head += '}'; oBrace--; }
+  return head;
+}
+
 async function processResponse(res, jobId, reqBody, fallbackUsed) {
   try {
     const data = await res.json();
     const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    const stopReason = data.stop_reason;
 
     const m = text.match(/\{[\s\S]*\}/);
-    if (!m) {
+    let jsonText = m ? m[0] : text;
+    if (!m && !text.startsWith('{')) {
       await jobStore().setJSON(jobId, { status: 'error', error: 'Kein JSON in Antwort', raw: text.slice(0, 800), completed: new Date().toISOString() });
       return { statusCode: 200, body: '' };
     }
+
     let parsed;
-    try { parsed = JSON.parse(m[0]); }
+    try { parsed = JSON.parse(jsonText); }
     catch (e) {
-      await jobStore().setJSON(jobId, { status: 'error', error: 'JSON-Parse-Fehler: ' + e.message, raw: text.slice(0, 800), completed: new Date().toISOString() });
-      return { statusCode: 200, body: '' };
+      // JSON-Repair: bei stop_reason=max_tokens war Output abgeschnitten
+      // → unvollständigen letzten Eintrag entfernen + Klammern schliessen
+      try {
+        const repaired = repairTruncatedJSON(jsonText);
+        parsed = JSON.parse(repaired);
+        parsed._jsonRepaired = true;
+        parsed._stopReason = stopReason;
+      } catch (e2) {
+        await jobStore().setJSON(jobId, {
+          status: 'error',
+          error: `JSON-Parse-Fehler: ${e.message}${stopReason==='max_tokens'?' (Output abgeschnitten bei max_tokens, Repair fehlgeschlagen)':''}`,
+          raw: jsonText.slice(0, 800),
+          stopReason,
+          completed: new Date().toISOString()
+        });
+        return { statusCode: 200, body: '' };
+      }
     }
 
     parsed.generated = new Date().toISOString();
