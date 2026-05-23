@@ -1,0 +1,9 @@
+{
+  "name": "global-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Geopolitisches Lagebild",
+  "dependencies": {
+    "@netlify/blobs": "^7.4.0"
+  }
+}

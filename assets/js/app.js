@@ -521,7 +521,10 @@ function setCnt(k, v) {
 
 /* ════ STATIC RENDERING ════ */
 function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
-  const askBtn = (lat !== undefined) ? `<br><span class="ask-region" onclick="window.askAboutRegion(${lat},${lng},'${title.replace(/'/g,"\\'")}')">→ KI-Analyse</span>` : '';
+  const safeTitle = String(title).replace(/'/g,"\\'");
+  const askBtn = (lat !== undefined)
+    ? `<br><span class="ask-region" onclick="window.askAboutRegion(${lat},${lng},'${safeTitle}')">→ Land öffnen / KI-Analyse</span>`
+    : '';
   let srcHtml = '';
   if (sourceKey && window.SOURCES?.[sourceKey]) {
     const s = window.SOURCES[sourceKey];
@@ -532,6 +535,23 @@ function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
   }
   return `<b>${title}</b><br>${html}<br><span class="tag" style="background:${tagColor}22;color:${tagColor}">${tagText}</span>${askBtn}${srcHtml}`;
 }
+
+// Auto-Update der Region beim Öffnen jedes Marker-Popups
+// (sonst zeigt das Country-Panel weiter ein vorher gewähltes Land)
+map.on('popupopen', (e) => {
+  const pop = e.popup;
+  const ll = pop.getLatLng();
+  if (!ll) return;
+  // Nur wenn AI-Panel offen ist (sonst nervt es)
+  if (!document.getElementById('ai').classList.contains('open')) return;
+  // Wenn der aktuelle currentRegion bereits sehr nahe ist, nicht neu laden
+  if (currentRegion && Math.abs(+currentRegion.lat - ll.lat) < 0.3 && Math.abs(+currentRegion.lng - ll.lng) < 0.3) return;
+  // Title aus Popup-Content extrahieren
+  const html = pop.getContent();
+  const titleMatch = typeof html === 'string' ? html.match(/<b>([^<]+)<\/b>/) : null;
+  const name = titleMatch ? titleMatch[1] : null;
+  openRegion(ll.lat, ll.lng, name);
+});
 
 function renderStatic() {
   // Pipelines
@@ -1355,10 +1375,28 @@ function renderCountryInfo(iso2, profile, economic, live) {
     html += `<div class="ci-source-note">Wikidata abgerufen ${date}${live.fromCache?' (Cache)':''}</div>`;
   }
 
+  // ═══ DOSSIER & NOTIZEN ═══
+  html += `<div class="ci-section">
+    <div class="ci-section-title">Dossiers & Notizen <span class="ci-stand">Netlify Blobs</span></div>
+    <div class="dossier-actions">
+      <button class="ci-refresh" data-scope="full"     id="dosFull">📊 Voll-Dossier (AI)</button>
+      <button class="ci-refresh" data-scope="trade"    id="dosTrade">📦 Handel-Analyse</button>
+      <button class="ci-refresh" data-scope="military" id="dosMil">🛡 Militär-Profil</button>
+      <button class="ci-refresh" data-scope="role"     id="dosRole">🌐 Globale Rolle</button>
+      <button class="ci-refresh" id="newNoteBtn">✏ Eigene Notiz</button>
+    </div>
+    <div id="ciDossierList" class="ci-dossier-list">Lade Dokumente…</div>
+  </div>`;
+
   ciDiv.innerHTML = html;
   ciDiv.classList.add('show');
   document.getElementById('ciAiUpdateBtn')?.addEventListener('click', () => doAiUpdate(iso2));
   document.getElementById('ciCompareBtn')?.addEventListener('click', () => toggleCompareCountry(iso2, name));
+  ['dosFull','dosTrade','dosMil','dosRole'].forEach(id => {
+    document.getElementById(id)?.addEventListener('click', (e) => generateDossier(iso2, name, e.currentTarget.dataset.scope));
+  });
+  document.getElementById('newNoteBtn')?.addEventListener('click', () => openNoteModal(iso2, name));
+  loadNotesForCountry(iso2);
 }
 
 async function doAiUpdate(iso2) {
@@ -2428,6 +2466,179 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(item => {
 });
 
 /* ════════════════════════════════════════════════════════════════
+   NOTIZEN & DOSSIERS (Netlify Blobs)
+   ════════════════════════════════════════════════════════════════ */
+async function loadNotesForCountry(iso) {
+  const listEl = document.getElementById('ciDossierList');
+  if (!listEl) return;
+  if (!CONFIG.USE_BACKEND) { listEl.innerHTML = '<div class="ci-note">Backend nicht aktiv</div>'; return; }
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/notes?iso=${iso}`);
+    const data = await r.json();
+    const notes = data.notes || [];
+    if (!notes.length) {
+      listEl.innerHTML = '<div class="ci-empty">Noch keine Dokumente. Generiere ein AI-Dossier oder erstelle eine Notiz.</div>';
+      return;
+    }
+    listEl.innerHTML = notes.map(n => {
+      const typeBadge = n.type === 'ai-dossier' ? 'AI' : (n.type === 'ai-snapshot' ? 'KI' : 'Notiz');
+      const typeClass = n.type === 'ai-dossier' ? 'src-ai' : (n.type === 'ai-snapshot' ? 'src-ai' : 'src-static');
+      return `<div class="doc-item" data-id="${n.id}">
+        <div class="doc-head">
+          <span class="doc-title">${escapeHtml(n.title)}</span>
+          <span class="src-badge ${typeClass}">${typeBadge}</span>
+        </div>
+        <div class="doc-meta">${new Date(n.created).toLocaleString('de-CH', {dateStyle:'medium', timeStyle:'short'})} ${n.tags?.length?'· '+n.tags.join(', '):''}</div>
+        <div class="doc-actions">
+          <button data-act="open" data-id="${n.id}">Öffnen</button>
+          <button data-act="del" data-id="${n.id}">Löschen</button>
+        </div>
+      </div>`;
+    }).join('');
+    listEl.querySelectorAll('button[data-act]').forEach(b => {
+      b.onclick = async () => {
+        if (b.dataset.act === 'open') openDocument(b.dataset.id);
+        if (b.dataset.act === 'del' && confirm('Dokument löschen?')) {
+          await fetch(`${CONFIG.BACKEND_BASE}/notes?id=${encodeURIComponent(b.dataset.id)}`, {method:'DELETE'});
+          loadNotesForCountry(iso);
+        }
+      };
+    });
+  } catch (e) {
+    listEl.innerHTML = `<div class="ci-note">Fehler beim Laden: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function generateDossier(iso, countryName, scope) {
+  const btn = document.querySelector(`button[data-scope="${scope}"]`);
+  const orig = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = '… AI generiert'; }
+  toast(`AI generiert ${scope}-Dossier für ${countryName}…`);
+  try {
+    const ctx = {
+      profile: currentRegion?.profile,
+      live: currentRegion?.live,
+      economic: currentRegion?.economic,
+    };
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/dossier`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ iso, countryName, scope, context: ctx, save: true })
+    });
+    if (!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    toast('Dossier gespeichert');
+    loadNotesForCountry(iso);
+    // Direkt öffnen
+    if (data.savedAs) openDocument(data.savedAs);
+    else openDocumentInline(data);
+  } catch (e) {
+    toast('Dossier fehlgeschlagen: '+e.message);
+  }
+  if (btn) { btn.disabled = false; btn.textContent = orig; }
+}
+
+async function openDocument(id) {
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/notes?id=${encodeURIComponent(id)}`);
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    const note = await r.json();
+    showDocumentModal(note);
+  } catch (e) { toast('Konnte Dokument nicht öffnen: '+e.message); }
+}
+
+function openDocumentInline(dossier) {
+  // Falls Speichern fehlschlug, trotzdem anzeigen
+  showDocumentModal({
+    title: 'AI-Dossier (nicht gespeichert)',
+    type: 'ai-dossier',
+    dossier,
+    created: dossier.generated || new Date().toISOString(),
+  });
+}
+
+function showDocumentModal(note) {
+  const modal = document.getElementById('docModal');
+  const body = document.getElementById('docModalBody');
+  const titleEl = document.getElementById('docModalTitle');
+  titleEl.textContent = note.title || 'Dokument';
+  document.getElementById('docModalMeta').textContent =
+    `${note.type==='ai-dossier'?'AI-Dossier':'Notiz'} · ${new Date(note.created).toLocaleString('de-CH')}`;
+
+  let html = '';
+  if (note.type === 'ai-dossier' && note.dossier) {
+    const d = note.dossier;
+    if (d.summary) html += `<div class="doc-summary">${escapeHtml(d.summary)}</div>`;
+    if (d.sections) {
+      const labels = {profile:'Politisches Profil',economy:'Wirtschaft',industries:'Kernindustrien',trade:'Handelspartner',military:'Militärische Stärke',doctrine:'Militärische Doktrin',regionalRole:'Rolle in der Region',globalRole:'Globale Rolle',hotspots:'Brennpunkte'};
+      Object.entries(d.sections).forEach(([k,v]) => {
+        html += `<div class="doc-section"><h3>${labels[k]||k}</h3><div>${markdownish(v)}</div></div>`;
+      });
+    }
+    if (d.keyFacts) {
+      html += `<div class="doc-section"><h3>Key Facts</h3><div class="doc-kf">`;
+      const kf = d.keyFacts;
+      if (kf.industries?.length) html += `<div><b>Industrien:</b> ${kf.industries.join(', ')}</div>`;
+      if (kf.tradePartners) {
+        if (kf.tradePartners.export?.length) html += `<div><b>Exportpartner:</b> ${kf.tradePartners.export.join(', ')}</div>`;
+        if (kf.tradePartners.import?.length) html += `<div><b>Importpartner:</b> ${kf.tradePartners.import.join(', ')}</div>`;
+      }
+      if (kf.militaryActive) html += `<div><b>Aktive Soldaten:</b> ${kf.militaryActive}</div>`;
+      if (kf.militaryBudget) html += `<div><b>Mil-Budget:</b> ${kf.militaryBudget}</div>`;
+      if (kf.nuclearWeapons) html += `<div><b>Atomwaffen:</b> ${kf.nuclearWeapons}</div>`;
+      if (kf.majorAllies?.length) html += `<div><b>Hauptverbündete:</b> ${kf.majorAllies.join(', ')}</div>`;
+      if (kf.majorAdversaries?.length) html += `<div><b>Hauptgegner:</b> ${kf.majorAdversaries.join(', ')}</div>`;
+      html += `</div></div>`;
+    }
+    if (d.confidence) html += `<div class="doc-confidence">Confidence: <b>${d.confidence}</b> · ${escapeHtml(d.sourceNote||'')}</div>`;
+  } else {
+    html = `<div class="doc-section"><div>${markdownish(note.content||'')}</div></div>`;
+  }
+  body.innerHTML = html;
+  modal.classList.add('open');
+}
+
+function markdownish(text) {
+  if (!text) return '';
+  return escapeHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br>')
+    .replace(/^/, '<p>').concat('</p>');
+}
+
+function openNoteModal(iso, countryName) {
+  const modal = document.getElementById('noteEditModal');
+  document.getElementById('noteEditTitle').textContent = `Notiz · ${countryName}`;
+  document.getElementById('noteEditTitleInput').value = '';
+  document.getElementById('noteEditContent').value = '';
+  document.getElementById('noteEditTags').value = '';
+  modal.dataset.iso = iso;
+  modal.dataset.country = countryName;
+  modal.classList.add('open');
+  setTimeout(() => document.getElementById('noteEditTitleInput').focus(), 100);
+}
+
+async function saveNote() {
+  const modal = document.getElementById('noteEditModal');
+  const iso = modal.dataset.iso;
+  const title = document.getElementById('noteEditTitleInput').value.trim();
+  const content = document.getElementById('noteEditContent').value.trim();
+  const tags = document.getElementById('noteEditTags').value.split(',').map(t=>t.trim()).filter(Boolean);
+  if (!title) return toast('Titel nötig');
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/notes`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ iso, title, content, type:'manual', tags })
+    });
+    if (!res.ok) throw new Error('HTTP '+res.status);
+    toast('Notiz gespeichert');
+    modal.classList.remove('open');
+    loadNotesForCountry(iso);
+  } catch (e) { toast('Speichern fehlgeschlagen: '+e.message); }
+}
+
+/* ════════════════════════════════════════════════════════════════
    MULTI-COUNTRY-VERGLEICH
    ════════════════════════════════════════════════════════════════ */
 const CMP_KEY = 'gm_compare_v1';
@@ -2622,6 +2833,7 @@ ${countriesText}`;
 }
 document.getElementById('cmpAskAi')?.addEventListener('click', () => askAiComparison());
 document.querySelectorAll('#comparePanel .chip').forEach(c => c.onclick = () => askAiComparison(c.dataset.cq));
+document.getElementById('noteSaveBtn')?.addEventListener('click', saveNote);
 
 /* ════ START ════ */
 buildCategoryUI();
