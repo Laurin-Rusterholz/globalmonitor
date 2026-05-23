@@ -2,9 +2,9 @@
 const TTL = 10 * 60 * 1000;
 
 const QUERIES = [
-  { c: 'conflict', q: 'airstrike OR shelling OR offensive OR militants' },
-  { c: 'battle',   q: 'clashes OR firefight OR ambush OR skirmish' },
-  { c: 'protest',  q: 'protest OR unrest OR riots OR demonstration' },
+  { c: 'conflict', q: 'airstrike OR shelling' },
+  { c: 'battle',   q: 'clashes OR firefight' },
+  { c: 'protest',  q: 'protest OR riots' },
 ];
 
 const ALLOWED_TIMESPANS = ['1h','6h','12h','1d','3d','7d','1m'];

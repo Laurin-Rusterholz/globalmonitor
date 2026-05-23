@@ -59,6 +59,28 @@ function syncUrl() {
   try { history.replaceState(null, '', buildUrlHash()); } catch {}
 }
 
+/* ════════════════════════════════════════════════════════════════
+   PANEL-MANAGER (Mutual Exclusion)
+   ════════════════════════════════════════════════════════════════ */
+const SIDE_PANELS = ['ai', 'osint', 'briefing', 'comparePanel', 'pinPanel', 'researchPanel'];
+const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal'];
+
+function openSidePanel(id) {
+  SIDE_PANELS.forEach(p => {
+    if (p !== id) document.getElementById(p)?.classList.remove('open');
+  });
+  document.getElementById(id)?.classList.add('open');
+}
+function openModal(id) {
+  MODALS.forEach(m => {
+    if (m !== id) document.getElementById(m)?.classList.remove('open');
+  });
+  document.getElementById(id)?.classList.add('open');
+}
+function closeAllPanels() {
+  [...SIDE_PANELS, ...MODALS].forEach(p => document.getElementById(p)?.classList.remove('open'));
+}
+
 function toast(msg, ms=2200) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -1069,9 +1091,9 @@ document.getElementById('legendBtn').onclick = () => {
 };
 document.getElementById('osintBtn').onclick = () => {
   const panel = document.getElementById('osint');
-  const wasOpen = panel.classList.contains('open');
-  panel.classList.toggle('open');
-  if (!wasOpen && !osintStore.length) loadOsint();
+  if (panel.classList.contains('open')) { panel.classList.remove('open'); return; }
+  openSidePanel('osint');
+  if (!osintStore.length) loadOsint();
 };
 document.getElementById('closeOsint').onclick = () => {
   document.getElementById('osint').classList.remove('open');
@@ -1199,7 +1221,7 @@ async function openRegion(lat, lng, presetName, presetIso) {
   if (ctx.cablesNear.length) parts.push(`${ctx.cablesNear.length} Datenkabel`);
   document.getElementById('aiCtx').textContent = parts.length ? ('Erkannt: ' + parts.join(' · ')) : 'Wenig lokaler Kontext';
 
-  aiPanel.classList.add('open');
+  openSidePanel('ai');
   if (!presetName) reverseGeocode(lat, lng);
   else currentRegion.name = presetName;
   // Wenn ISO bekannt, direkt Profil laden; sonst wartet auf reverseGeocode
@@ -1563,6 +1585,13 @@ Beantworte präzise, faktenbasiert, mit konkreten Namen (Akteure, Häfen, Pipeli
       sourcesNote.textContent = '🔍 Mit Online-Recherche generiert';
       el.appendChild(sourcesNote);
     }
+    // Auto-Save als Research-Dokument
+    if (currentRegion?.iso2) {
+      const titleStub = q.slice(0, 80).replace(/\s+/g,' ');
+      const type = q.toLowerCase().includes('profit') ? 'ai-profiteers' : 'ai-chat';
+      const fullContent = `**Frage:** ${q}\n\n**Antwort:**\n${text}\n\n${useWebSearch?'_Mit Online-Recherche generiert._':''}`;
+      autoSaveAiOutput(currentRegion.iso2, titleStub, fullContent, type, [useWebSearch?'web-search':'static-context']);
+    }
   } catch (err) {
     el.classList.remove('thinking');
     el.textContent = 'Fehler: ' + err.message;
@@ -1733,9 +1762,8 @@ function gatherGlobalContext() {
 }
 
 async function generateBriefing(customQuestion) {
-  const panel = document.getElementById('briefing');
   const body = document.getElementById('briefingBody');
-  panel.classList.add('open');
+  openSidePanel('briefing');
   const q = customQuestion || 'Fasse die aktuelle globale Sicherheits- und Geopolitik-Lage knapp und priorisiert zusammen. Markiere die wichtigsten Hotspots, Eskalationen, ungewöhnliche Bewegungen. Nutze die mitgelieferten Live-Daten.';
   briefingHistory.push({ role: 'user', content: q });
   body.innerHTML += `<div class="msg user">${escapeHtml(q)}</div><div class="msg ai thinking" id="briefingThink">Analysiere weltweite Live-Daten…</div>`;
@@ -1764,6 +1792,8 @@ ${gatherGlobalContext()}`;
     th.classList.remove('thinking');
     th.id = '';
     th.innerHTML = text.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    // Auto-Save Briefing
+    autoSaveAiOutput('GLOBAL', `Briefing ${new Date().toLocaleDateString('de-CH')} (${timeWindow})`, `**Frage:** ${q}\n\n**Antwort:**\n${text}`, 'ai-briefing', [timeWindow]);
   } catch (e) {
     const th = document.getElementById('briefingThink');
     th.classList.remove('thinking');
@@ -1773,9 +1803,9 @@ ${gatherGlobalContext()}`;
 }
 document.getElementById('briefingBtn').onclick = () => {
   const panel = document.getElementById('briefing');
-  const isOpen = panel.classList.contains('open');
-  panel.classList.toggle('open');
-  if (!isOpen && !briefingHistory.length) generateBriefing();
+  if (panel.classList.contains('open')) { panel.classList.remove('open'); return; }
+  openSidePanel('briefing');
+  if (!briefingHistory.length) generateBriefing();
 };
 document.getElementById('closeBriefing').onclick = () => {
   document.getElementById('briefing').classList.remove('open');
@@ -2073,7 +2103,7 @@ function openPinAddModal(latlng) {
   document.getElementById('pinNote').value = '';
   document.getElementById('pinEmoji').selectedIndex = 0;
   document.getElementById('pinCoords').textContent = `${latlng.lat.toFixed(3)}, ${latlng.lng.toFixed(3)}`;
-  document.getElementById('pinAddModal').classList.add('open');
+  openModal('pinAddModal');
   setTimeout(() => document.getElementById('pinTitle').focus(), 100);
 }
 document.getElementById('pinSave').onclick = () => {
@@ -2092,7 +2122,9 @@ document.getElementById('pinCancel').onclick = () => {
 };
 
 document.getElementById('pinBtn').onclick = () => {
-  document.getElementById('pinPanel').classList.toggle('open');
+  const panel = document.getElementById('pinPanel');
+  if (panel.classList.contains('open')) { panel.classList.remove('open'); return; }
+  openSidePanel('pinPanel');
   renderPins();
 };
 document.getElementById('closePinPanel').onclick = () => document.getElementById('pinPanel').classList.remove('open');
@@ -2383,8 +2415,7 @@ async function maybeFireBriefing() {
 }
 
 document.getElementById('notifyBtn').onclick = async () => {
-  const modal = document.getElementById('notifyModal');
-  modal.classList.add('open');
+  openModal('notifyModal');
   const cfg = loadNotifyConfig();
   document.getElementById('notifyEnabled').checked = !!cfg.enabled;
   document.getElementById('notifyTime').value = cfg.time || '08:00';
@@ -2445,7 +2476,7 @@ function buildSourcesModal() {
 }
 document.getElementById('sourcesBtn').onclick = () => {
   buildSourcesModal();
-  document.getElementById('sourcesModal').classList.add('open');
+  openModal('sourcesModal');
 };
 document.querySelectorAll('[data-close]').forEach(b => {
   b.onclick = () => document.getElementById(b.dataset.close).classList.remove('open');
@@ -2587,8 +2618,11 @@ window.openCountryDossier = async function(iso, name, initialScope) {
   document.getElementById('cdFlag').textContent = flagEmoji(iso);
   document.getElementById('cdName').textContent = dossierState.name;
   document.getElementById('cdMeta').textContent = 'Lade Wikidata + World Bank…';
-  document.getElementById('cdBody').innerHTML = '<div style="text-align:center;padding:40px;color:var(--ink-dim)">Lade Daten…</div>';
-  modal.classList.add('open');
+  document.getElementById('cdBody').innerHTML = `<div class="dossier-skeleton">
+    <div class="skel-stats">${'<div class="skel-tile"></div>'.repeat(6)}</div>
+    <div class="skel-grid">${'<div class="skel-card"></div>'.repeat(4)}</div>
+  </div>`;
+  openModal('countryDossierModal');
   // Tab-Buttons setzen
   document.querySelectorAll('.dossier-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.tab === dossierState.tab);
@@ -3051,7 +3085,7 @@ function showDocumentModal(note) {
     html = `<div class="doc-section"><div>${markdownish(note.content||'')}</div></div>`;
   }
   body.innerHTML = html;
-  modal.classList.add('open');
+  openModal('docModal');
 }
 
 function markdownish(text) {
@@ -3071,7 +3105,7 @@ function openNoteModal(iso, countryName) {
   document.getElementById('noteEditTags').value = '';
   modal.dataset.iso = iso;
   modal.dataset.country = countryName;
-  modal.classList.add('open');
+  openModal('noteEditModal');
   setTimeout(() => document.getElementById('noteEditTitleInput').focus(), 100);
 }
 
@@ -3092,6 +3126,108 @@ async function saveNote() {
     modal.classList.remove('open');
     loadNotesForCountry(iso);
   } catch (e) { toast('Speichern fehlgeschlagen: '+e.message); }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   RESEARCH-MANAGER (zentrale Notiz-/Dossier-Übersicht)
+   ════════════════════════════════════════════════════════════════ */
+let researchAllNotes = [];
+
+async function loadAllResearch() {
+  if (!CONFIG.USE_BACKEND) return;
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/notes`);
+    const data = await r.json();
+    researchAllNotes = data.notes || [];
+    renderResearchPanel();
+  } catch (e) {
+    document.getElementById('researchList').innerHTML = `<div class="research-empty">Fehler: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderResearchPanel() {
+  const list = document.getElementById('researchList');
+  const cnt = document.getElementById('researchCount');
+  const search = document.getElementById('researchSearch').value.trim().toLowerCase();
+  const typeFilter = document.getElementById('researchTypeFilter').value;
+  const isoFilter = document.getElementById('researchCountryFilter').value;
+
+  // ISO-Filter befüllen
+  const isos = [...new Set(researchAllNotes.map(n => n.iso))].sort();
+  const select = document.getElementById('researchCountryFilter');
+  if (select.options.length - 1 !== isos.length) {
+    select.innerHTML = '<option value="">Alle Länder</option>' + isos.map(i => {
+      const name = window.getCountryProfile?.(i)?.name || i;
+      return `<option value="${i}"${i===isoFilter?' selected':''}>${flagEmoji(i)} ${name}</option>`;
+    }).join('');
+  }
+
+  let filtered = researchAllNotes;
+  if (typeFilter) filtered = filtered.filter(n => n.type === typeFilter);
+  if (isoFilter) filtered = filtered.filter(n => n.iso === isoFilter);
+  if (search) filtered = filtered.filter(n =>
+    (n.title||'').toLowerCase().includes(search) ||
+    (n.content||'').toLowerCase().includes(search) ||
+    (n.tags||[]).some(t => t.toLowerCase().includes(search))
+  );
+
+  cnt.textContent = `${filtered.length} von ${researchAllNotes.length} Dokumenten`;
+
+  if (!filtered.length) {
+    list.innerHTML = '<div class="research-empty">Keine Dokumente. Generiere AI-Dossiers oder erstelle Notizen.</div>';
+    return;
+  }
+
+  const typeLabel = {manual:'Notiz', 'ai-dossier':'AI-Dossier', 'ai-chat':'AI-Chat', 'ai-profiteers':'Profiteure', 'ai-briefing':'Briefing', 'ai-comparison':'Vergleich', 'ai-snapshot':'KI-Update'};
+  list.innerHTML = filtered.map(n => {
+    const countryName = window.getCountryProfile?.(n.iso)?.name || n.iso;
+    const preview = (n.content || '').replace(/[#*`]/g,'').slice(0, 200);
+    return `<div class="research-item" data-id="${n.id}">
+      <div class="research-item-head">
+        <div class="research-item-flag">${flagEmoji(n.iso)}</div>
+        <div class="research-item-title">${escapeHtml(n.title)}</div>
+      </div>
+      <div class="research-item-meta">
+        <span>${typeLabel[n.type]||n.type}</span>
+        <span>${escapeHtml(countryName)}</span>
+        <span>${new Date(n.created).toLocaleString('de-CH', {dateStyle:'short', timeStyle:'short'})}</span>
+      </div>
+      ${preview ? `<div class="research-item-preview">${escapeHtml(preview)}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('.research-item').forEach(item => {
+    item.onclick = () => openDocument(item.dataset.id);
+  });
+}
+
+document.getElementById('researchBtn')?.addEventListener('click', () => {
+  const panel = document.getElementById('researchPanel');
+  if (panel.classList.contains('open')) { panel.classList.remove('open'); return; }
+  openSidePanel('researchPanel');
+  loadAllResearch();
+});
+document.getElementById('closeResearchPanel')?.addEventListener('click', () => {
+  document.getElementById('researchPanel').classList.remove('open');
+});
+['researchSearch','researchTypeFilter','researchCountryFilter'].forEach(id => {
+  document.getElementById(id)?.addEventListener('input', renderResearchPanel);
+  document.getElementById(id)?.addEventListener('change', renderResearchPanel);
+});
+
+/* ════════════════════════════════════════════════════════════════
+   AUTO-SAVE für AI-Generationen
+   ════════════════════════════════════════════════════════════════ */
+async function autoSaveAiOutput(iso, title, content, type, tags = []) {
+  if (!CONFIG.USE_BACKEND || !iso) return null;
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/notes`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ iso, title, content, type, tags })
+    });
+    if (r.ok) return await r.json();
+  } catch (e) { console.warn('autoSave failed:', e.message); }
+  return null;
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -3161,7 +3297,7 @@ async function refreshCompareDataIfStale() {
 }
 
 async function openComparePanel() {
-  document.getElementById('comparePanel').classList.add('open');
+  openSidePanel('comparePanel');
   document.getElementById('cmpPanelSub').textContent = `${comparedCountries.length} Länder`;
   await refreshCompareDataIfStale();
   renderComparePanel();
@@ -3282,6 +3418,11 @@ ${countriesText}`;
     const data = await res.json();
     const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim() || '(keine Antwort)';
     answer.innerHTML = text.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
+    // Auto-Save Vergleichs-Analyse als Notiz für jedes beteiligte Land
+    const titles = comparedCountries.map(c => c.name).join(' × ');
+    comparedCountries.forEach(c => {
+      autoSaveAiOutput(c.iso, `Beziehungs-Analyse: ${titles}`, `**Fokus:** ${focus}\n\n**Antwort:**\n${text}`, 'ai-comparison', comparedCountries.map(c=>c.iso));
+    });
   } catch (e) {
     answer.innerHTML = '<span style="color:var(--conflict)">Fehler: '+e.message+'</span>';
   }

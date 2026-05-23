@@ -56,6 +56,7 @@
       <button class="tb-btn" id="historyBtn">🕰 Verlauf</button>
       <button class="tb-btn" id="notifyBtn">🔔 Briefing-Alarm</button>
       <button class="tb-btn" id="sourcesBtn">ℹ Quellen</button>
+      <button class="tb-btn" id="researchBtn">🗃 Recherche</button>
       <select class="tb-btn" id="timeWindow" title="Zeitfenster für Konflikt-Live-Daten">
         <option value="1d">24h</option>
         <option value="3d" selected>3 Tage</option>
@@ -161,6 +162,33 @@
     <input type="file" id="importPinsFile" accept=".json" style="display:none">
   </div>
   <div id="pinList" style="flex:1;overflow-y:auto;padding:8px 0"></div>
+</div>
+
+<!-- Research-Manager-Panel (Slide-In rechts) -->
+<div id="researchPanel">
+  <div class="osint-head">
+    <div>
+      <div class="region">Recherche-Manager</div>
+      <div class="coords" id="researchCount">Lade…</div>
+    </div>
+    <button class="closeBtn" id="closeResearchPanel">×</button>
+  </div>
+  <div class="research-filters">
+    <input id="researchSearch" type="text" placeholder="Suche in Titel/Inhalt…">
+    <select id="researchTypeFilter">
+      <option value="">Alle Typen</option>
+      <option value="manual">Notizen</option>
+      <option value="ai-dossier">AI-Dossiers</option>
+      <option value="ai-chat">AI-Chats</option>
+      <option value="ai-profiteers">Profiteure</option>
+      <option value="ai-briefing">Briefings</option>
+      <option value="ai-comparison">Vergleiche</option>
+    </select>
+    <select id="researchCountryFilter">
+      <option value="">Alle Länder</option>
+    </select>
+  </div>
+  <div id="researchList" class="research-list"></div>
 </div>
 
 <!-- Großes zentriertes Land-Dossier-Popup -->

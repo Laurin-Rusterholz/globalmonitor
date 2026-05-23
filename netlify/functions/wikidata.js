@@ -1,10 +1,29 @@
-// Wikidata SPARQL-Proxy für Live-Länderdaten (erweitert)
-// Liefert: Hauptstadt, Staatsoberhaupt, Regierungschef, Bevölkerung,
-// Regierungsform, Währung, Fläche, Gründung, Demonym, ISO3, Vorwahl,
-// Kontinent, Amtssprachen, Nachbarländer, Religionen, Hauptstadt-QID
+// Wikidata SPARQL-Proxy mit zweistufigem Cache:
+// 1) In-Memory (warm container, sehr schnell)
+// 2) Netlify Blobs (persistent über Cold-Starts)
 
-const cache = new Map();
-const TTL = 12 * 60 * 60 * 1000;
+const { getStore } = (() => { try { return require('@netlify/blobs'); } catch { return {}; } })();
+
+const memCache = new Map();
+const TTL_MEM = 12 * 60 * 60 * 1000;   // 12h Memory
+const TTL_BLOB = 7 * 24 * 60 * 60 * 1000; // 7d Blob
+
+async function getCachedBlob(iso) {
+  if (!getStore) return null;
+  try {
+    const store = getStore({ name: 'wikidata-cache', consistency: 'eventual' });
+    const blob = await store.get(`c:${iso}`, { type: 'json' });
+    if (blob && Date.now() - blob.t < TTL_BLOB) return blob;
+  } catch (e) { console.warn('Blob read fail:', e.message); }
+  return null;
+}
+async function saveCachedBlob(iso, d) {
+  if (!getStore) return;
+  try {
+    const store = getStore({ name: 'wikidata-cache', consistency: 'eventual' });
+    await store.setJSON(`c:${iso}`, { d, t: Date.now() });
+  } catch (e) { console.warn('Blob write fail:', e.message); }
+}
 
 const QUERY = (iso) => `
 SELECT
@@ -67,9 +86,16 @@ exports.handler = async (event) => {
   const iso = (event.queryStringParameters?.iso || '').toUpperCase();
   if (!iso || iso.length !== 2) return json({error:'iso2 required'}, 400);
 
-  const cached = cache.get(iso);
-  if (cached && Date.now() - cached.t < TTL) {
-    return json({...cached.d, fromCache:true});
+  // 1) Memory-Cache
+  const mem = memCache.get(iso);
+  if (mem && Date.now() - mem.t < TTL_MEM) {
+    return json({...mem.d, fromCache:'memory'});
+  }
+  // 2) Blob-Cache (persistent)
+  const blob = await getCachedBlob(iso);
+  if (blob) {
+    memCache.set(iso, blob);
+    return json({...blob.d, fromCache:'blob'});
   }
 
   try {
@@ -86,7 +112,8 @@ exports.handler = async (event) => {
     const b = data.results?.bindings?.[0];
     if (!b || (!b.capital && !b.hos && !b.govType)) {
       const empty = { iso, found:false, sourceUpdated:new Date().toISOString() };
-      cache.set(iso, {d:empty, t:Date.now()});
+      memCache.set(iso, {d:empty, t:Date.now()});
+      saveCachedBlob(iso, empty);
       return json(empty);
     }
 
@@ -119,7 +146,8 @@ exports.handler = async (event) => {
       religions: vList('religions'),
       memberships: vList('memberships'),
     };
-    cache.set(iso, {d: result, t: Date.now()});
+    memCache.set(iso, {d: result, t: Date.now()});
+    saveCachedBlob(iso, result);
     return json(result);
   } catch (e) {
     console.error('Wikidata error:', e);
