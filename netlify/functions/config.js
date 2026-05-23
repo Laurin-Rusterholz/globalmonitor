@@ -17,6 +17,9 @@ exports.handler = async () => {
       sentinelNeedsOauth: !!process.env.CDSE_CLIENT_ID,
       hasFirmsKey: !!process.env.NASA_FIRMS_KEY,
       hasAnthropic: !!process.env.ANTHROPIC_API_KEY,
+      // AISStream: WebSocket aus Browser; Key kommt hier zum Frontend
+      // (akzeptabel für Personal-Use; für Public-App sollte Backend-Relay genutzt werden)
+      aisStreamKey: process.env.AISSTREAM_KEY || null,
     })
   };
 };

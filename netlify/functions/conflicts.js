@@ -11,17 +11,29 @@ const ALLOWED_TIMESPANS = ['1h','6h','12h','1d','3d','7d','1m'];
 const cacheByWindow = {};
 
 exports.handler = async (event) => {
-  const t = (event.queryStringParameters?.timespan || '3d');
-  const timespan = ALLOWED_TIMESPANS.includes(t) ? t : '3d';
-  const slot = cacheByWindow[timespan];
+  const qs = event.queryStringParameters || {};
+  const t = qs.timespan || '3d';
+  const startdt = qs.startdatetime;  // Format YYYYMMDDHHMMSS
+  const enddt   = qs.enddatetime;
+  let timespan = ALLOWED_TIMESPANS.includes(t) ? t : '3d';
+  let mode = 'span';
+  let cacheKey = timespan;
+  if (startdt && enddt) {
+    mode = 'range';
+    cacheKey = `${startdt}_${enddt}`;
+  }
+  const slot = cacheByWindow[cacheKey];
   if (slot && Date.now() - slot.time < TTL) return json(slot.data);
 
   const events = [];
   const errors = [];
   await Promise.all(QUERIES.map(async item => {
     try {
+      const params = mode === 'range'
+        ? `&format=geojson&startdatetime=${startdt}&enddatetime=${enddt}&maxpoints=200`
+        : `&format=geojson&timespan=${timespan}&maxpoints=200`;
       const url = 'https://api.gdeltproject.org/api/v2/geo/geo?query=' +
-        encodeURIComponent(item.q) + `&format=geojson&timespan=${timespan}&maxpoints=200`;
+        encodeURIComponent(item.q) + params;
       const res = await fetch(url, { headers: { 'User-Agent': 'GlobalMonitor/1.0' } });
       if (!res.ok) throw new Error('GDELT ' + res.status);
       const data = await res.json();
@@ -40,8 +52,8 @@ exports.handler = async (event) => {
     } catch (e) { errors.push(`${item.c}:${e.message}`); }
   }));
 
-  const data = { events, errors, timespan, updated: new Date().toISOString() };
-  cacheByWindow[timespan] = { data, time: Date.now() };
+  const data = { events, errors, mode, timespan, startdt, enddt, updated: new Date().toISOString() };
+  cacheByWindow[cacheKey] = { data, time: Date.now() };
   return json(data);
 };
 

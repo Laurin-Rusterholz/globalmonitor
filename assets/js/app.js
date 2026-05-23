@@ -171,6 +171,12 @@ async function loadSentinelConfig() {
     } else {
       console.log('Sentinel-Hub nicht konfiguriert (SENTINEL_INSTANCE_ID fehlt)');
     }
+    if (c.aisStreamKey) {
+      aisStreamKey = c.aisStreamKey;
+      console.log('AISStream aktiviert');
+    } else {
+      console.log('AISStream nicht konfiguriert (AISSTREAM_KEY fehlt) - Demo-Schiffe');
+    }
   } catch (e) { console.warn('Config:', e); }
 }
 
@@ -333,6 +339,9 @@ const LAYERS = {
   // Live-Militär (Proxies)
   thermal:     {n:'Thermal-Anomalien (FIRMS)', c:'#ff4d3d', cat:'liveMil', on:false},
   gdeltMil:    {n:'GDELT Militär-Themen (Live)', c:'#ff5cf2', cat:'liveMil', on:false},
+  burntAreas:  {n:'Brandflächen (EFFIS/MODIS)', c:'#ff7847', cat:'liveMil', on:false},
+  // User Pins
+  pins:        {n:'Eigene Pins',            c:'#21c7d6', cat:'user', on:true},
 };
 
 // LayerGroups initialisieren
@@ -381,6 +390,7 @@ const CATEGORIES = [
   {id:'politics',  n:'Politik & Wirtschaft', ic:'⚖', open:true},
   {id:'air',       n:'Luftraum',           ic:'✈', open:false},
   {id:'liveMil',   n:'Live-Militär (OSINT)', ic:'⚡', open:true},
+  {id:'user',      n:'Eigene Daten',        ic:'📌', open:true},
 ];
 
 function buildCategoryUI() {
@@ -439,12 +449,14 @@ function buildCategoryUI() {
             if (key === 'disaster') loadDisasters();
             if (key === 'thermal') startThermal();
             if (key === 'gdeltMil') loadGdeltMil();
+            if (key === 'burntAreas') activateBurntAreas();
           } else {
             map.removeLayer(l.group);
             if (key === 'planes') stopPlanes();
             if (key === 'planesMil') stopMilPlanes();
             if (key === 'ships') stopShips();
             if (key === 'thermal') stopThermal();
+            if (key === 'burntAreas') deactivateBurntAreas();
           }
           const el = document.querySelector(`#cnt-${key}`)?.parentElement;
           if (el) el.classList.toggle('off', !target);
@@ -467,12 +479,14 @@ function toggleLayer(key, el) {
     if (key === 'disaster') loadDisasters();
     if (key === 'thermal') startThermal();
     if (key === 'gdeltMil') loadGdeltMil();
+    if (key === 'burntAreas') activateBurntAreas();
   } else {
     map.removeLayer(l.group);
     if (key === 'planes') stopPlanes();
     if (key === 'planesMil') stopMilPlanes();
     if (key === 'ships') stopShips();
     if (key === 'thermal') stopThermal();
+    if (key === 'burntAreas') deactivateBurntAreas();
   }
   persistLayers();
 }
@@ -494,9 +508,17 @@ function setCnt(k, v) {
 }
 
 /* ════ STATIC RENDERING ════ */
-function popup(title, html, tagColor, tagText, lat, lng) {
+function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
   const askBtn = (lat !== undefined) ? `<br><span class="ask-region" onclick="window.askAboutRegion(${lat},${lng},'${title.replace(/'/g,"\\'")}')">→ KI-Analyse</span>` : '';
-  return `<b>${title}</b><br>${html}<br><span class="tag" style="background:${tagColor}22;color:${tagColor}">${tagText}</span>${askBtn}`;
+  let srcHtml = '';
+  if (sourceKey && window.SOURCES?.[sourceKey]) {
+    const s = window.SOURCES[sourceKey];
+    const link = s.url && s.url !== '#'
+      ? `<a href="${s.url}" target="_blank" rel="noopener">${s.name}</a>`
+      : s.name;
+    srcHtml = `<span class="popup-source">Quelle: ${link}${s.refresh?` · ${s.refresh}`:''}</span>`;
+  }
+  return `<b>${title}</b><br>${html}<br><span class="tag" style="background:${tagColor}22;color:${tagColor}">${tagText}</span>${askBtn}${srcHtml}`;
 }
 
 function renderStatic() {
@@ -507,7 +529,7 @@ function renderStatic() {
       color: lg.c, weight: 2.5, opacity: .85,
       dashArray: p.s === 'beschädigt' ? '3 5' : (p.t === 'gas' ? '7 5' : null)
     })
-    .bindPopup(popup(p.n, `Status: <b>${p.s}</b>`, lg.c, p.t === 'oil' ? 'Ölpipeline' : 'Gaspipeline'))
+    .bindPopup(popup(p.n, `Status: <b>${p.s}</b>`, lg.c, p.t === 'oil' ? 'Ölpipeline' : 'Gaspipeline', undefined, undefined, 'pipelines'))
     .addTo(lg.group);
   });
   setCnt('pipeOil', R.pipelines.filter(p => p.t === 'oil').length);
@@ -518,7 +540,7 @@ function renderStatic() {
     const isRail = r.t === 'rail';
     const lg = isRail ? LAYERS.brirail : LAYERS.routes;
     L.polyline(r.c, {color: lg.c, weight: isRail ? 2.2 : 1.8, opacity: .65, dashArray: isRail ? '8 4' : null})
-      .bindPopup(popup(r.n, isRail ? 'Eisenbahnkorridor' : 'Seehandelsroute', lg.c, isRail ? 'BRI/Rail' : 'Seeroute'))
+      .bindPopup(popup(r.n, isRail ? 'Eisenbahnkorridor' : 'Seehandelsroute', lg.c, isRail ? 'BRI/Rail' : 'Seeroute', undefined, undefined, 'routes'))
       .addTo(lg.group);
   });
   setCnt('routes', R.routes.filter(r => r.t !== 'rail').length);
@@ -527,7 +549,7 @@ function renderStatic() {
   // Cables
   R.cables.forEach(c => {
     L.polyline(c.c, {color: LAYERS.cables.c, weight: 1.6, opacity: .55, dashArray: '5 3'})
-      .bindPopup(popup(c.n, 'Internet-Seekabel', LAYERS.cables.c, 'Datenkabel'))
+      .bindPopup(popup(c.n, 'Internet-Seekabel', LAYERS.cables.c, 'Datenkabel', undefined, undefined, 'cables'))
       .addTo(LAYERS.cables.group);
   });
   setCnt('cables', R.cables.length);
@@ -660,7 +682,7 @@ function placeConflicts(events) {
     const lg = LAYERS[cat] || LAYERS.conflict;
     const r = ev.count ? Math.min(4 + Math.log(ev.count + 1) * 2.2, 16) : 7;
     L.circleMarker([ev.la, ev.lo], {radius:r, color:lg.c, fillColor:lg.c, fillOpacity:.35, weight:1.5})
-      .bindPopup(popup(ev.n, `${ev.i || ''}${ev.count ? `<br><span class="row"><span>Meldungen:</span><b>${ev.count}</b></span>` : ''}`, lg.c, lg.n, ev.la, ev.lo))
+      .bindPopup(popup(ev.n, `${ev.i || ''}${ev.count ? `<br><span class="row"><span>Meldungen:</span><b>${ev.count}</b></span>` : ''}`, lg.c, lg.n, ev.la, ev.lo, cat))
       .addTo(lg.group);
     conflictStore.push(ev);
   });
@@ -689,7 +711,7 @@ async function loadQuakes() {
       const m = f.properties.mag;
       const r = Math.max(3, m * 1.8);
       L.circleMarker([la, lo], {radius:r, color:LAYERS.quake.c, fillColor:LAYERS.quake.c, fillOpacity:.35, weight:1.5})
-        .bindPopup(popup(`M${m.toFixed(1)} ${f.properties.place || 'Erdbeben'}`, `<span class="row"><span>Tiefe:</span><b>${depth} km</b></span><span class="row"><span>Zeit:</span><b>${new Date(f.properties.time).toISOString().slice(0,16).replace('T',' ')}</b></span>`, LAYERS.quake.c, `Erdbeben M${m.toFixed(1)}`, la, lo))
+        .bindPopup(popup(`M${m.toFixed(1)} ${f.properties.place || 'Erdbeben'}`, `<span class="row"><span>Tiefe:</span><b>${depth} km</b></span><span class="row"><span>Zeit:</span><b>${new Date(f.properties.time).toISOString().slice(0,16).replace('T',' ')}</b></span>`, LAYERS.quake.c, `Erdbeben M${m.toFixed(1)}`, la, lo, 'quake'))
         .addTo(LAYERS.quake.group);
     });
     setCnt('quake', features.length);
@@ -712,7 +734,7 @@ async function loadDisasters() {
       const [lo, la] = g.coordinates;
       if (typeof lo !== 'number') return;
       L.circleMarker([la, lo], {radius:6, color:LAYERS.disaster.c, fillColor:LAYERS.disaster.c, fillOpacity:.4, weight:1.5})
-        .bindPopup(popup(ev.title, `<span class="row"><span>Kategorie:</span><b>${ev.categories?.[0]?.title || '-'}</b></span>`, LAYERS.disaster.c, 'Naturkatastrophe', la, lo))
+        .bindPopup(popup(ev.title, `<span class="row"><span>Kategorie:</span><b>${ev.categories?.[0]?.title || '-'}</b></span>`, LAYERS.disaster.c, 'Naturkatastrophe', la, lo, 'disaster'))
         .addTo(LAYERS.disaster.group);
       count++;
     });
@@ -816,7 +838,7 @@ async function loadThermal() {
         radius: r, color: LAYERS.thermal.c, fillColor: LAYERS.thermal.c,
         fillOpacity: .5, weight: 1
       })
-      .bindPopup(popup(`🔥 Thermal-Anomalie`, `Helligkeit: <b>${Math.round(f.bright)}K</b><br>Konfidenz: ${f.conf}${f.region?`<br>Region: ${f.region}`:''}${f.date?`<br>Datum: ${f.date}`:''}`, LAYERS.thermal.c, data.demo ? 'FIRMS (Demo)' : 'FIRMS Live', f.la, f.lo))
+      .bindPopup(popup(`🔥 Thermal-Anomalie`, `Helligkeit: <b>${Math.round(f.bright)}K</b><br>Konfidenz: ${f.conf}${f.region?`<br>Region: ${f.region}`:''}${f.date?`<br>Datum: ${f.date}`:''}`, LAYERS.thermal.c, data.demo ? 'FIRMS (Demo)' : 'FIRMS Live', f.la, f.lo, 'thermal'))
       .addTo(LAYERS.thermal.group);
     });
     setCnt('thermal', fires.length + (data.demo ? ' demo' : ''));
@@ -849,7 +871,7 @@ async function loadGdeltMil() {
       })
       .bindPopup(popup(`${symMap[ev.c]||'•'} ${ev.n}`,
         `${ev.i || ''}${ev.count ? `<br><span class="row"><span>Meldungen:</span><b>${ev.count}</b></span>` : ''}`,
-        LAYERS.gdeltMil.c, labelMap[ev.c] || 'Militär-Thema', ev.la, ev.lo))
+        LAYERS.gdeltMil.c, labelMap[ev.c] || 'Militär-Thema', ev.la, ev.lo, 'gdeltMil'))
       .addTo(LAYERS.gdeltMil.group);
     });
     setCnt('gdeltMil', events.length);
@@ -905,10 +927,17 @@ function fmtDate(s) {
 /* ════ LIVE: SCHIFFE ════ */
 let shipTimer = null;
 function startShips() {
+  // Wenn AIS-Stream-Key konfiguriert: WebSocket-Live nutzen (via startAis weiter unten)
+  if (typeof aisStreamKey !== 'undefined' && aisStreamKey) {
+    if (typeof startAis === 'function') return startAis();
+  }
   loadShips();
   shipTimer = setInterval(loadShips, CONFIG.SHIP_REFRESH_MS);
 }
 function stopShips() {
+  if (typeof aisStreamKey !== 'undefined' && aisStreamKey && typeof stopAis === 'function') {
+    return stopAis();
+  }
   clearInterval(shipTimer);
 }
 async function loadShips() {
@@ -1079,6 +1108,7 @@ window.askAboutRegion = function(lat, lng, name) {
 
 map.on('click', async e => {
   if (measureActive) return; // im Mess-Modus keine Region öffnen
+  if (pinMode) return;       // im Pin-Modus keine Region öffnen
   openRegion(e.latlng.lat, e.latlng.lng);
 });
 
@@ -1440,6 +1470,450 @@ document.getElementById('closeBriefing').onclick = () => {
 document.getElementById('generateBriefing').onclick = () => generateBriefing();
 document.querySelectorAll('#briefing .chip').forEach(c => c.onclick = () => generateBriefing(c.dataset.bq));
 
+/* ════════════════════════════════════════════════════════════════
+   PINS / EIGENE ANNOTATIONS
+   ════════════════════════════════════════════════════════════════ */
+const PINS_KEY = 'gm_pins_v1';
+let pins = [];
+let pinMode = false;
+let pinPendingLatLng = null;
+
+function loadPins() {
+  try { pins = JSON.parse(localStorage.getItem(PINS_KEY) || '[]'); } catch { pins = []; }
+}
+function savePins() { try { localStorage.setItem(PINS_KEY, JSON.stringify(pins)); } catch {} }
+
+function renderPins() {
+  LAYERS.pins.group.clearLayers();
+  const list = document.getElementById('pinList');
+  if (!pins.length) {
+    list.innerHTML = '<div class="osint-loading">Noch keine Pins. Klick auf 📍 Pin-Modus, dann auf die Karte.</div>';
+  } else {
+    list.innerHTML = pins.map((p, i) => `
+      <div class="pin-item" data-i="${i}">
+        <div class="pin-emoji">${p.emoji||'📍'}</div>
+        <div class="pin-content">
+          <div class="pin-title">${escapeHtml(p.title)}</div>
+          ${p.note?`<div class="pin-note">${escapeHtml(p.note)}</div>`:''}
+          <div class="pin-meta"><span>${p.la.toFixed(2)}, ${p.lo.toFixed(2)}</span><span>${new Date(p.t).toLocaleString('de-CH')}</span></div>
+          <div class="pin-actions">
+            <button data-act="goto" data-i="${i}">Anzeigen</button>
+            <button data-act="ai" data-i="${i}">KI fragen</button>
+            <button data-act="del" data-i="${i}">Löschen</button>
+          </div>
+        </div>
+      </div>
+    `).join('');
+    list.querySelectorAll('button[data-act]').forEach(b => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        const i = +b.dataset.i, p = pins[i];
+        if (b.dataset.act === 'goto') map.flyTo([p.la, p.lo], 9);
+        else if (b.dataset.act === 'ai') { window.askAboutRegion(p.la, p.lo, p.title); }
+        else if (b.dataset.act === 'del') { if (confirm('Pin löschen?')) { pins.splice(i,1); savePins(); renderPins(); } }
+      };
+    });
+    list.querySelectorAll('.pin-item').forEach(el => {
+      el.onclick = () => { const p = pins[+el.dataset.i]; map.flyTo([p.la, p.lo], 9); };
+    });
+  }
+  document.getElementById('pinCount').textContent = `${pins.length} Pin${pins.length===1?'':'s'}`;
+
+  pins.forEach((p, i) => {
+    const icon = L.divIcon({className:'', html:`<div style="font-size:22px;line-height:1;text-shadow:0 0 6px rgba(33,199,214,.9)">${p.emoji||'📍'}</div>`, iconSize:[24,24], iconAnchor:[12,22]});
+    L.marker([p.la, p.lo], {icon}).bindPopup(popup(`${p.emoji||'📍'} ${p.title}`, escapeHtml(p.note||'(keine Notiz)') + `<br><span class="row"><span>Erstellt:</span><b>${new Date(p.t).toLocaleString('de-CH')}</b></span>`, LAYERS.pins.c, 'Eigener Pin', p.la, p.lo)).addTo(LAYERS.pins.group);
+  });
+  setCnt('pins', pins.length);
+}
+
+function openPinAddModal(latlng) {
+  pinPendingLatLng = latlng;
+  document.getElementById('pinTitle').value = '';
+  document.getElementById('pinNote').value = '';
+  document.getElementById('pinEmoji').selectedIndex = 0;
+  document.getElementById('pinCoords').textContent = `${latlng.lat.toFixed(3)}, ${latlng.lng.toFixed(3)}`;
+  document.getElementById('pinAddModal').classList.add('open');
+  setTimeout(() => document.getElementById('pinTitle').focus(), 100);
+}
+document.getElementById('pinSave').onclick = () => {
+  const title = document.getElementById('pinTitle').value.trim() || 'Pin';
+  pins.unshift({
+    title, note: document.getElementById('pinNote').value.trim(),
+    emoji: document.getElementById('pinEmoji').value,
+    la: pinPendingLatLng.lat, lo: pinPendingLatLng.lng, t: Date.now()
+  });
+  savePins(); renderPins();
+  document.getElementById('pinAddModal').classList.remove('open');
+  toast('Pin gespeichert');
+};
+document.getElementById('pinCancel').onclick = () => {
+  document.getElementById('pinAddModal').classList.remove('open');
+};
+
+document.getElementById('pinBtn').onclick = () => {
+  document.getElementById('pinPanel').classList.toggle('open');
+  renderPins();
+};
+document.getElementById('closePinPanel').onclick = () => document.getElementById('pinPanel').classList.remove('open');
+document.getElementById('pinModeBtn').onclick = () => {
+  pinMode = !pinMode;
+  document.getElementById('pinModeBtn').classList.toggle('active', pinMode);
+  map._container.style.cursor = pinMode ? 'crosshair' : '';
+  toast(pinMode ? 'Klick auf die Karte um Pin zu setzen' : 'Pin-Modus aus');
+};
+document.getElementById('exportPinsBtn').onclick = () => {
+  const blob = new Blob([JSON.stringify(pins, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `global-monitor-pins-${new Date().toISOString().slice(0,10)}.json`;
+  a.click(); URL.revokeObjectURL(url);
+};
+document.getElementById('importPinsBtn').onclick = () => document.getElementById('importPinsFile').click();
+document.getElementById('importPinsFile').onchange = (e) => {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      if (!Array.isArray(data)) throw new Error('Kein Array');
+      pins = [...data, ...pins];
+      savePins(); renderPins(); toast(`${data.length} Pins importiert`);
+    } catch (err) { toast('Import fehlgeschlagen: '+err.message); }
+  };
+  reader.readAsText(file);
+};
+
+/* ════════════════════════════════════════════════════════════════
+   HISTORISCHER VERLAUF-MODUS
+   ════════════════════════════════════════════════════════════════ */
+let historyMode = false;
+function pad(n){return String(n).padStart(2,'0');}
+function toGdeltDt(d){return `${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;}
+
+async function loadConflictsHistorical(centerDate, windowHours) {
+  const half = windowHours * 60 * 60 * 1000 / 2;
+  const start = new Date(centerDate.getTime() - half);
+  const end   = new Date(centerDate.getTime() + half);
+  setStatus(`Lade Verlauf ${start.toISOString().slice(0,10)}…${end.toISOString().slice(0,10)}`, 'load');
+  ['conflict','battle','protest'].forEach(k => LAYERS[k].group.clearLayers());
+  conflictStore = [];
+  try {
+    const url = `${CONFIG.BACKEND_BASE}/conflicts?startdatetime=${toGdeltDt(start)}&enddatetime=${toGdeltDt(end)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    placeConflicts(data.events || []);
+    setStatus(`${conflictStore.length} historische Konflikte`, 'ok');
+    rebuildHeatmap();
+  } catch(e) {
+    console.error(e); setStatus('Historie-Fehler', 'err');
+  }
+  updateConflictCounts();
+}
+
+document.getElementById('historyBtn').onclick = () => {
+  const bar = document.getElementById('historyBar');
+  historyMode = !historyMode;
+  document.getElementById('historyBtn').classList.toggle('active', historyMode);
+  bar.classList.toggle('show', historyMode);
+  if (historyMode) {
+    const di = document.getElementById('histDate');
+    if (!di.value) {
+      const today = new Date();
+      di.max = today.toISOString().slice(0,10);
+      // GDELT free hat begrenzte Historie - ca. 1-3 Jahre für GEO geht meist
+      di.value = new Date(today.getTime() - 365*86400000).toISOString().slice(0,10);
+    }
+    if (conflictTimer) clearInterval(conflictTimer);
+    triggerHistorical();
+  } else {
+    loadConflicts();
+    conflictTimer = setInterval(loadConflicts, CONFIG.CONFLICT_REFRESH_MS);
+  }
+};
+function triggerHistorical() {
+  const d = document.getElementById('histDate').value;
+  const h = +document.getElementById('histHours').value || 24;
+  if (!d) return;
+  const date = new Date(d + 'T12:00:00Z');
+  document.getElementById('histDisplay').textContent = `${d} ± ${h}h`;
+  loadConflictsHistorical(date, h);
+}
+['histDate','histHours'].forEach(id => document.getElementById(id).addEventListener('change', triggerHistorical));
+document.getElementById('histReset').onclick = () => {
+  historyMode = false;
+  document.getElementById('historyBar').classList.remove('show');
+  document.getElementById('historyBtn').classList.remove('active');
+  loadConflicts();
+  conflictTimer = setInterval(loadConflicts, CONFIG.CONFLICT_REFRESH_MS);
+};
+
+/* ════════════════════════════════════════════════════════════════
+   AIS LIVE-SCHIFFE (WebSocket via AISStream.io)
+   ════════════════════════════════════════════════════════════════ */
+let aisSocket = null;
+let aisVessels = new Map();      // mmsi -> {marker, lastSeen, ...}
+let aisStreamKey = null;
+let aisCleanupTimer = null;
+
+function startAis() {
+  if (!aisStreamKey) {
+    console.log('AIS: kein Key, Fallback auf Demo');
+    placeShips(R.demoShips, true);
+    return;
+  }
+  if (aisSocket) try { aisSocket.close(); } catch {}
+  try {
+    aisSocket = new WebSocket('wss://stream.aisstream.io/v0/stream');
+    aisSocket.onopen = () => {
+      const b = map.getBounds();
+      aisSocket.send(JSON.stringify({
+        APIKey: aisStreamKey,
+        BoundingBoxes: [[[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]]],
+        FilterMessageTypes: ['PositionReport','ShipStaticData']
+      }));
+      setCnt('ships', 'live ws');
+      toast('AIS Live verbunden');
+    };
+    aisSocket.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.MessageType === 'PositionReport') {
+          const m = msg.Message?.PositionReport;
+          if (!m) return;
+          const mmsi = m.UserID;
+          const la = m.Latitude, lo = m.Longitude;
+          const heading = m.TrueHeading === 511 ? (m.Cog || 0) : m.TrueHeading;
+          let v = aisVessels.get(mmsi);
+          if (!v) {
+            v = { name: 'MMSI '+mmsi, type:'unknown', flag:'-', heading };
+            aisVessels.set(mmsi, v);
+          }
+          v.la = la; v.lo = lo; v.heading = heading; v.lastSeen = Date.now();
+          // Marker erstellen oder bewegen
+          if (v.marker) {
+            v.marker.setLatLng([la, lo]);
+            const div = v.marker.getElement()?.querySelector('.ship-icon');
+            if (div) div.style.transform = `rotate(${heading}deg)`;
+          } else {
+            const isMil = (m.ShipType >= 32 && m.ShipType <= 35);
+            const cls = 'ship-icon' + (isMil ? ' military' : '');
+            const icon = L.divIcon({className:'', html:`<div class="${cls}" style="transform:rotate(${heading||0}deg)">${isMil?'◆':'▲'}</div>`, iconSize:[14,14]});
+            v.marker = L.marker([la, lo], {icon}).bindPopup(`<b>${v.name}</b><br>Live AIS<br>MMSI ${mmsi}`).addTo((isMil?LAYERS.shipsMil:LAYERS.ships).group);
+          }
+        } else if (msg.MessageType === 'ShipStaticData') {
+          const m = msg.Message?.ShipStaticData;
+          if (!m) return;
+          const mmsi = m.UserID;
+          let v = aisVessels.get(mmsi);
+          if (!v) { v = {}; aisVessels.set(mmsi, v); }
+          if (m.Name) v.name = String(m.Name).trim();
+          v.type = m.Type;
+          if (v.marker) v.marker.setPopupContent(`<b>${v.name||'MMSI '+mmsi}</b><br>Live AIS<br>Type ${v.type}<br>MMSI ${mmsi}`);
+        }
+        setCnt('ships', aisVessels.size + ' live');
+      } catch (e) { /* malformed message */ }
+    };
+    aisSocket.onerror = (e) => { console.error('AIS WS error', e); };
+    aisSocket.onclose = () => {
+      console.log('AIS WS closed');
+      setCnt('ships', '·');
+    };
+    // Alte Vessels nach 10 Min entfernen
+    if (!aisCleanupTimer) aisCleanupTimer = setInterval(() => {
+      const cutoff = Date.now() - 10*60*1000;
+      for (const [mmsi, v] of aisVessels.entries()) {
+        if (v.lastSeen && v.lastSeen < cutoff) {
+          if (v.marker) v.marker.remove();
+          aisVessels.delete(mmsi);
+        }
+      }
+    }, 60000);
+  } catch (e) {
+    console.error('AIS WS init', e);
+    placeShips(R.demoShips, true);
+  }
+}
+function stopAis() {
+  if (aisSocket) { try { aisSocket.close(); } catch {} aisSocket = null; }
+  if (aisCleanupTimer) { clearInterval(aisCleanupTimer); aisCleanupTimer = null; }
+  aisVessels.forEach(v => v.marker?.remove());
+  aisVessels.clear();
+}
+// startShips/stopShips wurden so erweitert, dass sie aisStreamKey berücksichtigen
+// (siehe oben in der ursprünglichen Definition)
+
+/* ════════════════════════════════════════════════════════════════
+   EFFIS / BURNT AREAS WMS
+   ════════════════════════════════════════════════════════════════ */
+let burntLayer = null;
+function activateBurntAreas() {
+  // EFFIS / Copernicus EMS WMS für verbrannte Flächen
+  // Endpoint hat öffentliche Layer, kein Key nötig
+  if (burntLayer) return;
+  burntLayer = L.tileLayer.wms('https://maps.effis.emergency.copernicus.eu/effis', {
+    layers: 'modis.ba.poly',
+    format: 'image/png',
+    transparent: true,
+    opacity: 0.65,
+    attribution: '© Copernicus EMS / EFFIS · MODIS Burnt Areas'
+  });
+  burntLayer.on('tileerror', () => {
+    console.warn('EFFIS WMS tile error - Endpunkt nicht erreichbar');
+  });
+  LAYERS.burntAreas.group.addLayer(burntLayer);
+  setCnt('burntAreas', 'WMS');
+}
+function deactivateBurntAreas() {
+  if (burntLayer) { LAYERS.burntAreas.group.removeLayer(burntLayer); burntLayer = null; }
+}
+// activateBurntAreas/deactivateBurntAreas werden direkt aus toggleLayer aufgerufen
+
+/* ════════════════════════════════════════════════════════════════
+   NOTIFICATIONS + DAILY BRIEFING
+   ════════════════════════════════════════════════════════════════ */
+const NOTIFY_KEY = 'gm_notify_v1';
+function loadNotifyConfig() { try { return JSON.parse(localStorage.getItem(NOTIFY_KEY) || '{}'); } catch { return {}; } }
+function saveNotifyConfig(c) { try { localStorage.setItem(NOTIFY_KEY, JSON.stringify(c)); } catch {} }
+
+async function registerSW() {
+  if (!('serviceWorker' in navigator)) return null;
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    return reg;
+  } catch (e) { console.warn('SW register failed', e); return null; }
+}
+
+async function ensureNotificationPermission() {
+  if (!('Notification' in window)) return 'unsupported';
+  if (Notification.permission === 'granted') return 'granted';
+  if (Notification.permission === 'denied') return 'denied';
+  return await Notification.requestPermission();
+}
+
+async function sendNotification(title, body) {
+  const perm = await ensureNotificationPermission();
+  if (perm !== 'granted') return false;
+  const reg = await navigator.serviceWorker?.ready?.catch(() => null);
+  if (reg?.active) {
+    reg.active.postMessage({ type:'show-notification', payload:{ title, body, tag:'gm-briefing' } });
+  } else {
+    new Notification(title, { body });
+  }
+  return true;
+}
+
+// Briefing-Trigger (jede Minute prüfen ob es Zeit ist)
+async function maybeFireBriefing() {
+  const cfg = loadNotifyConfig();
+  if (!cfg.enabled || !cfg.time) return;
+  const now = new Date();
+  const [hh, mm] = cfg.time.split(':').map(Number);
+  const todayKey = now.toISOString().slice(0,10);
+  if (cfg.lastFired === todayKey) return;
+  if (now.getHours() < hh) return;
+  if (now.getHours() === hh && now.getMinutes() < mm) return;
+  // Trigger
+  console.log('Daily briefing trigger');
+  // Briefing inhaltlich
+  await loadConflicts();
+  const win = cfg.window || '3d';
+  const shortLines = [];
+  if (conflictStore.length) shortLines.push(`${conflictStore.length} Konflikt-Events (${win})`);
+  if (thermalStore.length) shortLines.push(`${thermalStore.length} Thermal-Hotspots`);
+  if (osintStore.length) shortLines.push(`${osintStore.length} OSINT-Meldungen`);
+  const body = shortLines.length ? shortLines.join(' · ') : 'Datenstand abgerufen';
+  await sendNotification('🌍 Daily Briefing', body);
+  saveNotifyConfig({ ...cfg, lastFired: todayKey });
+}
+
+document.getElementById('notifyBtn').onclick = async () => {
+  const modal = document.getElementById('notifyModal');
+  modal.classList.add('open');
+  const cfg = loadNotifyConfig();
+  document.getElementById('notifyEnabled').checked = !!cfg.enabled;
+  document.getElementById('notifyTime').value = cfg.time || '08:00';
+  document.getElementById('notifyWindow').value = cfg.window || '3d';
+  const perm = (typeof Notification !== 'undefined') ? Notification.permission : 'unsupported';
+  document.getElementById('notifyStatus').textContent = `Notification-Permission: ${perm}`;
+};
+document.getElementById('notifyEnabled').onchange = async (e) => {
+  const cfg = loadNotifyConfig();
+  if (e.target.checked) {
+    const perm = await ensureNotificationPermission();
+    document.getElementById('notifyStatus').textContent = `Notification-Permission: ${perm}`;
+    if (perm !== 'granted') { e.target.checked = false; return toast('Permission nötig'); }
+    await registerSW();
+  }
+  saveNotifyConfig({ ...cfg, enabled: e.target.checked });
+};
+['notifyTime','notifyWindow'].forEach(id => {
+  document.getElementById(id).onchange = (e) => {
+    const cfg = loadNotifyConfig();
+    cfg[id.replace('notify','').toLowerCase()] = e.target.value;
+    saveNotifyConfig(cfg);
+  };
+});
+document.getElementById('notifyTest').onclick = async () => {
+  const ok = await sendNotification('🌍 Global Monitor', 'Test-Benachrichtigung. Wenn du das siehst, funktioniert es.');
+  toast(ok ? 'Test gesendet' : 'Notification fehlgeschlagen');
+};
+
+setInterval(maybeFireBriefing, 60 * 1000);
+
+/* ════════════════════════════════════════════════════════════════
+   QUELLEN-MODAL
+   ════════════════════════════════════════════════════════════════ */
+function buildSourcesModal() {
+  const body = document.getElementById('sourcesBody');
+  const groups = { live:'Live-Daten', static:'Statische Referenzdaten', basemap:'Basemaps', ai:'KI / Sonstige' };
+  let html = '<p class="modal-info">Volle Transparenz, woher jede Information stammt, mit Lizenz und Aktualisierungsfrequenz.</p>';
+  Object.entries(groups).forEach(([type, name]) => {
+    const items = Object.entries(window.SOURCES).filter(([_,s]) => s.type === type);
+    if (!items.length) return;
+    html += `<div class="src-group"><h3>${name} (${items.length})</h3>`;
+    items.forEach(([k, s]) => {
+      const link = s.url && s.url !== '#'
+        ? `<a href="${s.url}" target="_blank" rel="noopener">${s.name}</a>`
+        : s.name;
+      html += `
+        <div class="src-item">
+          <div class="src-key">${k}<small>${s.name.slice(0,30)}</small></div>
+          <div class="src-desc">${link}<br>${s.description}
+            <div class="src-meta">${s.license||''} ${s.refresh?'· '+s.refresh:''} ${s.accuracy?'· '+s.accuracy:''}</div>
+          </div>
+        </div>`;
+    });
+    html += '</div>';
+  });
+  body.innerHTML = html;
+}
+document.getElementById('sourcesBtn').onclick = () => {
+  buildSourcesModal();
+  document.getElementById('sourcesModal').classList.add('open');
+};
+document.querySelectorAll('[data-close]').forEach(b => {
+  b.onclick = () => document.getElementById(b.dataset.close).classList.remove('open');
+});
+// Click-outside modal schließt
+document.querySelectorAll('.modal').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+
+/* ════════════════════════════════════════════════════════════════
+   MAP-CLICK ROUTING: Pin-Modus → Pin, Measure-Modus → Messen,
+   sonst Regions-Analyse
+   ════════════════════════════════════════════════════════════════ */
+const originalRegionClickWrapped = true; // marker - regions click bleibt aktiv
+map.on('click', e => {
+  if (pinMode) {
+    e.originalEvent?.stopPropagation();
+    pinMode = false;
+    document.getElementById('pinModeBtn').classList.remove('active');
+    map._container.style.cursor = '';
+    openPinAddModal(e.latlng);
+  }
+});
+
 /* ════ START ════ */
 buildCategoryUI();
 renderStatic();
@@ -1447,6 +1921,8 @@ buildLegend();
 loadConflicts();
 conflictTimer = setInterval(loadConflicts, CONFIG.CONFLICT_REFRESH_MS);
 loadSentinelConfig();
+loadPins(); renderPins();
+registerSW();
 
 // OSINT-Feed im Hintergrund laden (für KI-Kontext)
 if (CONFIG.USE_BACKEND) {
