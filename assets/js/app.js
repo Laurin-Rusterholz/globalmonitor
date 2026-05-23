@@ -4208,7 +4208,14 @@ function enterProjectMode() {
   document.getElementById('projModeName').textContent = activeProject?.name || 'Projekt';
   // Gespeicherte Breite anwenden
   const savedW = localStorage.getItem('gm_proj_panel_width');
-  if (savedW) document.getElementById('projectPanel').style.width = savedW;
+  const panel = document.getElementById('projectPanel');
+  if (savedW) {
+    panel.style.width = savedW;
+    document.body.style.setProperty('--proj-sidebar-w', savedW);
+  } else {
+    // Default 50vw als Wert in Pixeln setzen damit Toolbar richtig positioniert
+    document.body.style.setProperty('--proj-sidebar-w', Math.floor(window.innerWidth * 0.5) + 'px');
+  }
   setTimeout(() => map.invalidateSize(), 200);
 }
 
@@ -4229,6 +4236,7 @@ function enterProjectMode() {
     if (!dragging) return;
     const newW = Math.max(400, Math.min(window.innerWidth * 0.8, startW + (e.clientX - startX)));
     panel.style.width = newW + 'px';
+    document.body.style.setProperty('--proj-sidebar-w', newW + 'px');
   });
   document.addEventListener('mouseup', () => {
     if (!dragging) return;

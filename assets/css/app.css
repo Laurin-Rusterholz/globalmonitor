@@ -538,8 +538,9 @@ select.tb-btn{appearance:none;padding-right:24px;background-image:linear-gradien
 body.project-mode #sidebar{display:none}
 body.project-mode #app{grid-template-columns:1fr}
 body.project-mode #topbar{
-  top:auto; bottom:14px; left:50%; transform:translateX(-50%);
+  top:auto; bottom:14px; left:auto; right:14px; transform:none;
   background:rgba(15,20,29,.97); border:1px solid var(--protest);
+  max-width:calc(100vw - var(--proj-sidebar-w, 50vw) - 28px);
 }
 body.project-mode #projectPanel{
   position:absolute; top:0; left:0; right:auto;
@@ -646,12 +647,12 @@ body.project-mode .proj-toolbar{
 
 /* Drawing-Sub-Toolbar (Auswahl der Zeichen-Werkzeuge) */
 .draw-sub-toolbar{
-  position:fixed; bottom:14px; left:50%; transform:translateX(-50%);
+  position:fixed; bottom:70px; right:14px;
   z-index:1500; display:none; gap:6px; flex-wrap:wrap;
   background:rgba(15,20,29,.97); backdrop-filter:blur(10px);
   border:2px solid var(--protest); border-radius:30px;
   padding:8px 12px; box-shadow:0 12px 36px rgba(0,0,0,.6);
-  max-width:90vw;
+  max-width:calc(100vw - var(--proj-sidebar-w, 50vw) - 28px);
 }
 .draw-sub-toolbar button{background:var(--panel-2);border:1px solid var(--line-2);
   color:var(--ink);border-radius:20px;padding:7px 14px;cursor:pointer;
