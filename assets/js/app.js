@@ -1183,58 +1183,166 @@ async function loadCountryInfo(lat, lng) {
 async function loadCountryInfoByIso(iso2) {
   const ciDiv = document.getElementById('countryInfo');
   ciDiv.classList.remove('show');
-  let economic = null;
-  if (CONFIG.USE_BACKEND) {
-    try {
-      const r = await fetch(`${CONFIG.BACKEND_BASE}/country?iso=${iso2}`);
-      if (r.ok) {
-        const d = await r.json();
-        if (d && !d.error) {
-          economic = d;
-          currentRegion.economic = d;
-        }
-      }
-    } catch (e) { console.error('Country:', e); }
-  }
+  ciDiv.innerHTML = '<div class="ci-loading">Lade Wikidata + World Bank…</div>';
+  ciDiv.classList.add('show');
 
-  // Almanach-Profil aus countries.js
   const profile = window.getCountryProfile?.(iso2);
   currentRegion.profile = profile;
 
+  // Parallel: World Bank + Wikidata
+  const [economic, live] = await Promise.all([
+    fetchEconomic(iso2),
+    fetchWikidata(iso2),
+  ]);
+  currentRegion.economic = economic;
+  currentRegion.live = live;
+
+  renderCountryInfo(iso2, profile, economic, live);
+}
+
+async function fetchEconomic(iso2) {
+  if (!CONFIG.USE_BACKEND) return null;
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/country?iso=${iso2}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return (d && !d.error) ? d : null;
+  } catch { return null; }
+}
+async function fetchWikidata(iso2) {
+  if (!CONFIG.USE_BACKEND) return null;
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/wikidata?iso=${iso2}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return (d && !d.error && d.found !== false) ? d : null;
+  } catch { return null; }
+}
+
+function srcBadge(src) {
+  if (src === 'live') return '<span class="src-badge src-live" title="Live von Wikidata">LIVE</span>';
+  if (src === 'wb')   return '<span class="src-badge src-wb" title="World Bank">WB</span>';
+  if (src === 'static')return '<span class="src-badge src-static" title="Kuratiert Anfang 2026">KUR</span>';
+  if (src === 'ai')   return '<span class="src-badge src-ai" title="KI-aktualisiert">KI</span>';
+  return '';
+}
+
+function pickField(live, profile, key, liveKey) {
+  liveKey = liveKey || key;
+  if (live && live[liveKey]) return { val: live[liveKey], src: 'live' };
+  if (profile && profile[key]) return { val: profile[key], src: 'static' };
+  return null;
+}
+
+function fmtLeaderWithDate(name, startDate) {
+  if (!name) return '';
+  if (!startDate) return name;
+  // Wikidata startDate ist ISO: 2024-07-05T00:00:00Z
+  const d = new Date(startDate);
+  if (isNaN(d)) return name;
+  return `${name} (seit ${d.getFullYear()})`;
+}
+
+function renderCountryInfo(iso2, profile, economic, live) {
+  const ciDiv = document.getElementById('countryInfo');
   let html = '';
-  if (profile) {
-    html += `
-      <div class="ci-section">
-        <div class="ci-section-title">Politisches Profil <span class="ci-stand">Stand 2026</span></div>
-        ${profile.capital     ? `<div class="ci-row"><span>Hauptstadt</span><b>${profile.capital}</b></div>` : ''}
-        ${profile.govType     ? `<div class="ci-row"><span>Regierungsform</span><b>${profile.govType}</b></div>` : ''}
-        ${profile.leader      ? `<div class="ci-row ci-row-wide"><span>Führung</span><b>${profile.leader}</b></div>` : ''}
-        ${profile.ruling      ? `<div class="ci-row ci-row-wide"><span>Regierungspartei</span><b>${profile.ruling}</b></div>` : ''}
-        ${profile.nextElection? `<div class="ci-row ci-row-wide"><span>Nächste Wahl</span><b>${profile.nextElection}</b></div>` : ''}
-        ${profile.alliances?.length ? `<div class="ci-row ci-row-wide"><span>Allianzen</span><b>${profile.alliances.join(', ')}</b></div>` : ''}
-        ${profile.context     ? `<div class="ci-context">${escapeHtml(profile.context)}</div>` : ''}
-        ${profile.notes       ? `<div class="ci-note">${escapeHtml(profile.notes)}</div>` : ''}
-      </div>
-    `;
+
+  // ════ POLITISCHES PROFIL (live + static merge) ════
+  const cap   = pickField(live, profile, 'capital');
+  const gov   = pickField(live, profile, 'govType');
+  const head  = live?.headOfState ? { val: fmtLeaderWithDate(live.headOfState, live.headOfStateStart), src:'live' }
+              : profile?.leader   ? { val: profile.leader, src:'static' } : null;
+  const pm    = live?.headOfGovernment && live.headOfGovernment !== live.headOfState
+              ? { val: fmtLeaderWithDate(live.headOfGovernment, live.headOfGovernmentStart), src:'live' } : null;
+  const aiUp  = currentRegion.aiUpdate;
+
+  const ruling = aiUp?.ruling ? {val:aiUp.ruling, src:'ai'} : (profile?.ruling ? {val:profile.ruling, src:'static'} : null);
+  const election = aiUp?.nextElection ? {val:aiUp.nextElection, src:'ai'} : (profile?.nextElection ? {val:profile.nextElection, src:'static'} : null);
+  const context = aiUp?.context ? {val:aiUp.context, src:'ai'} : (profile?.context ? {val:profile.context, src:'static'} : null);
+  const notes = aiUp?.notes ? {val:aiUp.notes, src:'ai'} : (profile?.notes ? {val:profile.notes, src:'static'} : null);
+
+  if (cap || gov || head || profile) {
+    html += `<div class="ci-section">
+      <div class="ci-section-title">
+        Politisches Profil
+        <button class="ci-refresh" id="ciAiUpdateBtn" title="Via KI aktualisieren">🤖 KI</button>
+      </div>`;
+    if (cap)   html += `<div class="ci-row"><span>Hauptstadt ${srcBadge(cap.src)}</span><b>${escapeHtml(cap.val)}</b></div>`;
+    if (gov)   html += `<div class="ci-row"><span>Regierungsform ${srcBadge(gov.src)}</span><b>${escapeHtml(gov.val)}</b></div>`;
+    if (head)  html += `<div class="ci-row ci-row-wide"><span>Staatsoberhaupt ${srcBadge(head.src)}</span><b>${escapeHtml(head.val)}</b></div>`;
+    if (pm)    html += `<div class="ci-row ci-row-wide"><span>Regierungschef ${srcBadge(pm.src)}</span><b>${escapeHtml(pm.val)}</b></div>`;
+    if (ruling)html += `<div class="ci-row ci-row-wide"><span>Regierungspartei ${srcBadge(ruling.src)}</span><b>${escapeHtml(ruling.val)}</b></div>`;
+    if (election) html += `<div class="ci-row ci-row-wide"><span>Nächste Wahl ${srcBadge(election.src)}</span><b>${escapeHtml(election.val)}</b></div>`;
+    if (profile?.alliances?.length) html += `<div class="ci-row ci-row-wide"><span>Allianzen ${srcBadge('static')}</span><b>${profile.alliances.join(', ')}</b></div>`;
+    if (live?.currency) html += `<div class="ci-row"><span>Währung ${srcBadge('live')}</span><b>${escapeHtml(live.currency)}${live.currencyCode?` (${live.currencyCode})`:''}</b></div>`;
+    if (context) html += `<div class="ci-context">${escapeHtml(context.val)} ${srcBadge(context.src)}</div>`;
+    if (notes) html += `<div class="ci-note">${escapeHtml(notes.val)} ${srcBadge(notes.src)}</div>`;
+    if (live?.sourceUpdated) {
+      const date = new Date(live.sourceUpdated).toLocaleString('de-CH', {dateStyle:'medium', timeStyle:'short'});
+      html += `<div class="ci-source-note">Wikidata abgerufen ${date}${live.fromCache?' (Cache)':''}</div>`;
+    }
+    html += `</div>`;
   }
+
+  // ════ WIRTSCHAFT ════
   if (economic) {
-    html += `
-      <div class="ci-section">
-        <div class="ci-section-title">Wirtschaft (World Bank)</div>
-        <div class="ci-row"><span>Bevölkerung</span><b>${fmtNum(economic.population)}</b></div>
-        <div class="ci-row"><span>BIP (USD)</span><b>${fmtMoney(economic.gdp)}</b></div>
-        <div class="ci-row"><span>BIP/Kopf</span><b>${fmtMoney(economic.gdpPerCapita)}</b></div>
-        <div class="ci-row"><span>Militärausg. (% BIP)</span><b>${economic.militaryPct ? economic.militaryPct.toFixed(2)+'%' : '–'}</b></div>
-        <div class="ci-row"><span>Inflation</span><b>${economic.inflation ? economic.inflation.toFixed(2)+'%' : '–'}</b></div>
-        <div class="ci-row"><span>Lebenserwartung</span><b>${economic.lifeExp ? economic.lifeExp.toFixed(1)+' J' : '–'}</b></div>
-      </div>
-    `;
+    html += `<div class="ci-section">
+      <div class="ci-section-title">Wirtschaft <span class="src-badge src-wb">World Bank</span></div>
+      <div class="ci-row"><span>Bevölkerung</span><b>${fmtNum(economic.population)}</b></div>
+      <div class="ci-row"><span>BIP (USD)</span><b>${fmtMoney(economic.gdp)}</b></div>
+      <div class="ci-row"><span>BIP/Kopf</span><b>${fmtMoney(economic.gdpPerCapita)}</b></div>
+      <div class="ci-row"><span>Militärausg. (% BIP)</span><b>${economic.militaryPct ? economic.militaryPct.toFixed(2)+'%' : '–'}</b></div>
+      <div class="ci-row"><span>Inflation</span><b>${economic.inflation ? economic.inflation.toFixed(2)+'%' : '–'}</b></div>
+      <div class="ci-row"><span>Lebenserwartung</span><b>${economic.lifeExp ? economic.lifeExp.toFixed(1)+' J' : '–'}</b></div>
+    </div>`;
   }
-  if (!html && iso2) {
-    html = `<div class="ci-note">Kein Almanach-Eintrag für ${iso2} - du kannst eigene Profile in localStorage unter <code>gm_country_overrides</code> ergänzen.</div>`;
+  if (live?.area) {
+    html += `<div class="ci-section">
+      <div class="ci-section-title">Geografie <span class="src-badge src-live">Wikidata</span></div>
+      <div class="ci-row"><span>Fläche</span><b>${fmtNum(live.area)} km²</b></div>
+      ${live.inception ? `<div class="ci-row"><span>Gründung</span><b>${new Date(live.inception).getFullYear()}</b></div>` : ''}
+    </div>`;
   }
+
+  if (!html) {
+    html = `<div class="ci-note">Keine Daten für ${iso2}. <button class="ci-refresh" id="ciAiUpdateBtn">🤖 KI versuchen</button></div>`;
+  }
+
   ciDiv.innerHTML = html;
-  if (html) ciDiv.classList.add('show');
+  ciDiv.classList.add('show');
+
+  // KI-Update-Button verdrahten
+  document.getElementById('ciAiUpdateBtn')?.addEventListener('click', () => doAiUpdate(iso2));
+}
+
+async function doAiUpdate(iso2) {
+  const btn = document.getElementById('ciAiUpdateBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '… KI fragt'; }
+  try {
+    const profile = window.getCountryProfile?.(iso2);
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/aiupdate`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        iso: iso2,
+        countryName: profile?.name || currentRegion?.name || iso2,
+        currentData: {
+          leader: profile?.leader,
+          ruling: profile?.ruling,
+          nextElection: profile?.nextElection,
+          context: profile?.context
+        }
+      })
+    });
+    if (!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    currentRegion.aiUpdate = data;
+    toast(`KI-Update (Confidence: ${data.confidence||'?'})`);
+    renderCountryInfo(iso2, profile, currentRegion.economic, currentRegion.live);
+  } catch (e) {
+    toast('KI-Update fehlgeschlagen: '+e.message);
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 KI'; }
+  }
 }
 
 function fmtNum(n) { if (!n) return '–'; if (n>=1e9) return (n/1e9).toFixed(2)+' Mrd'; if (n>=1e6) return (n/1e6).toFixed(2)+' Mio'; if (n>=1e3) return (n/1e3).toFixed(1)+'k'; return n.toString(); }
@@ -1270,16 +1378,36 @@ function buildContextString() {
     const e = currentRegion.economic;
     lines.push(`Wirtschaftsdaten: BIP ${fmtMoney(e.gdp)}, BIP/Kopf ${fmtMoney(e.gdpPerCapita)}, Bev. ${fmtNum(e.population)}${e.militaryPct?', Mil.-Ausg. '+e.militaryPct.toFixed(2)+'% BIP':''}`);
   }
+  // Live Wikidata - höchste Priorität
+  if (currentRegion.live) {
+    const l = currentRegion.live;
+    lines.push(`POLITISCHES PROFIL (LIVE via Wikidata, ${new Date(l.sourceUpdated).toLocaleDateString('de-CH')}):`);
+    if (l.capital)         lines.push(` · Hauptstadt: ${l.capital}`);
+    if (l.govType)         lines.push(` · Regierungsform: ${l.govType}`);
+    if (l.headOfState)     lines.push(` · Staatsoberhaupt: ${l.headOfState}${l.headOfStateStart?` (seit ${new Date(l.headOfStateStart).getFullYear()})`:''}`);
+    if (l.headOfGovernment && l.headOfGovernment !== l.headOfState) lines.push(` · Regierungschef: ${l.headOfGovernment}${l.headOfGovernmentStart?` (seit ${new Date(l.headOfGovernmentStart).getFullYear()})`:''}`);
+    if (l.currency)        lines.push(` · Währung: ${l.currency}${l.currencyCode?` (${l.currencyCode})`:''}`);
+    if (l.population)      lines.push(` · Bevölkerung (Wikidata): ${fmtNum(l.population)}`);
+    if (l.area)            lines.push(` · Fläche: ${fmtNum(l.area)} km²`);
+  }
+  // Kuratierte Profile - ergänzend für Felder die Wikidata nicht hat
   if (currentRegion.profile) {
     const p = currentRegion.profile;
-    lines.push(`POLITISCHES PROFIL (kuratiert, Stand 2026):`);
-    if (p.govType)      lines.push(` · Regierungsform: ${p.govType}`);
-    if (p.leader)       lines.push(` · Führung: ${p.leader}`);
+    lines.push(`KURATIERTES PROFIL (Stand 2026, kann veraltet sein):`);
     if (p.ruling)       lines.push(` · Regierungspartei: ${p.ruling}`);
     if (p.nextElection) lines.push(` · Nächste Wahl: ${p.nextElection}`);
     if (p.alliances?.length) lines.push(` · Allianzen: ${p.alliances.join(', ')}`);
     if (p.context)      lines.push(` · Kontext: ${p.context}`);
     if (p.notes)        lines.push(` · Notiz: ${p.notes}`);
+  }
+  // KI-Update (falls vorhanden, überstimmt static)
+  if (currentRegion.aiUpdate) {
+    const a = currentRegion.aiUpdate;
+    lines.push(`KI-AKTUALISIERUNG (Confidence: ${a.confidence||'?'}):`);
+    if (a.leader)       lines.push(` · Führung: ${a.leader}`);
+    if (a.ruling)       lines.push(` · Regierungspartei: ${a.ruling}`);
+    if (a.nextElection) lines.push(` · Nächste Wahl: ${a.nextElection}`);
+    if (a.context)      lines.push(` · Kontext: ${a.context}`);
   }
   return lines.length ? ('\n\nLOKALER KARTENKONTEXT:\n' + lines.join('\n')) : '';
 }
