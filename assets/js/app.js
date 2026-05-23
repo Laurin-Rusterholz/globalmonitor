@@ -3754,16 +3754,32 @@ async function suggestProjectCountries() {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ thesis: combined, baseCountries: [], webSearch: false })
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
+    // Body immer lesen, auch bei Fehler
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = { error: 'Server lieferte kein JSON', raw: text.slice(0, 300) }; }
+
+    if (!res.ok || data.error) {
+      console.error('projectanalyze HTTP ' + res.status, data);
+      const detail = data.error || `HTTP ${res.status}`;
+      let hint = '';
+      if (text.includes('credit') || text.includes('balance') || res.status === 402) hint = ' → Anthropic-Guthaben aufgebraucht. Lade in console.anthropic.com nach.';
+      else if (res.status === 401) hint = ' → API-Key ungültig in Netlify-ENV.';
+      else if (res.status === 429) hint = ' → Rate Limit, warte 60 Sek.';
+      else if (res.status === 504 || detail.includes('Timeout') || detail.includes('aborted')) hint = ' → KI-Antwort zu langsam (Netlify-10s-Limit).';
+      else if (detail.includes('JSON')) hint = ' → KI-Antwort nicht parsebar - bitte nochmal.';
+      preview.innerHTML = `<span style="color:var(--conflict)"><b>Fehler:</b> ${escapeHtml(detail)}${hint}</span><br><small style="color:var(--ink-faint)">${escapeHtml((data.raw||'').slice(0,200))}</small>`;
+      btn.disabled = false; btn.textContent = orig;
+      return;
+    }
+
     const countries = (data.countries || []).filter(c => c.iso);
     if (!countries.length) {
       preview.innerHTML = '<span style="color:var(--ink-faint)">Keine Länder erkannt - bitte manuell eingeben.</span>';
     } else {
       const isos = countries.map(c => c.iso);
       document.getElementById('newProjCountries').value = isos.join(', ');
-      preview.innerHTML = `<b style="color:var(--protest)">${countries.length} vorgeschlagen:</b><br>` +
+      preview.innerHTML = `<b style="color:var(--protest)">${countries.length} vorgeschlagen (${data.model||'?'}):</b><br>` +
         countries.slice(0,15).map(c => {
           const cName = window.getCountryProfile?.(c.iso)?.name || c.iso;
           return `<span title="${escapeHtml(c.reason||'')}">${flagEmoji(c.iso)} ${escapeHtml(cName)} <small style="opacity:.7">(${c.role||'?'})</small></span>`;
@@ -3771,7 +3787,8 @@ async function suggestProjectCountries() {
         (countries.length > 15 ? ` <i>+${countries.length-15} weitere</i>` : '');
     }
   } catch (e) {
-    preview.innerHTML = `<span style="color:var(--conflict)">Fehler: ${escapeHtml(e.message)}</span>`;
+    console.error('projectanalyze network', e);
+    preview.innerHTML = `<span style="color:var(--conflict)"><b>Netzwerkfehler:</b> ${escapeHtml(e.message)}</span>`;
   }
   btn.disabled = false; btn.textContent = orig;
 }

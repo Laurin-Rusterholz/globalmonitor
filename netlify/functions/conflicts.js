@@ -37,12 +37,12 @@ exports.handler = async (event) => {
       // GDELT GEO API erfordert mode=PointData und timespan im Vollwort-Format
       const gdeltTs = GDELT_TIMESPAN[timespan] || '72hours';
       const params = mode === 'range'
-        ? `&mode=PointData&format=GeoJSON&startdatetime=${startdt}&enddatetime=${enddt}&maxpoints=200`
-        : `&mode=PointData&format=GeoJSON&timespan=${gdeltTs}&maxpoints=200`;
+        ? `&mode=PointData&format=GeoJSON&startdatetime=${startdt}&enddatetime=${enddt}&maxpoints=100`
+        : `&mode=PointData&format=GeoJSON&timespan=${gdeltTs}&maxpoints=100`;
       const url = 'https://api.gdeltproject.org/api/v2/geo/geo?query=' +
         encodeURIComponent(item.q) + params;
       const ctrl = new AbortController();
-      const timeoutId = setTimeout(() => ctrl.abort(), 7000);
+      const timeoutId = setTimeout(() => ctrl.abort(), 9500); // knapp unter Netlify-10s-Limit
       let res;
       try {
         res = await fetch(url, {
@@ -52,6 +52,9 @@ exports.handler = async (event) => {
           },
           signal: ctrl.signal
         });
+      } catch (fetchErr) {
+        if (fetchErr.name === 'AbortError') throw new Error(`Timeout nach 9.5s - GDELT antwortet zu langsam`);
+        throw fetchErr;
       } finally { clearTimeout(timeoutId); }
       if (!res.ok) {
         const sample = await res.text().catch(() => '').then(t => t.slice(0, 200));
