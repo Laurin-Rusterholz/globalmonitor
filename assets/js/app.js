@@ -333,6 +333,8 @@ const LAYERS = {
   // Politik & Wirtschaft
   sanctions:   {n:'Sanktionierte Staaten', c:'#ff5da2', cat:'politics', on:true},
   bri:         {n:'BRI-Projekte',        c:'#ffa83d', cat:'politics', on:false},
+  politicalMap:{n:'Politische Weltkarte', c:'#21c7d6', cat:'politics', on:false},
+  allianceMap: {n:'Allianzen-Färbung',    c:'#7a5cff', cat:'politics', on:false},
   // Luft
   planes:      {n:'Flugzeuge (Live)',    c:'#9fb3c8', cat:'air', on:false},
   planesMil:   {n:'Militärflüge (Live)', c:'#ff7847', cat:'air', on:false},
@@ -450,6 +452,8 @@ function buildCategoryUI() {
             if (key === 'thermal') startThermal();
             if (key === 'gdeltMil') loadGdeltMil();
             if (key === 'burntAreas') activateBurntAreas();
+            if (key === 'politicalMap') activatePoliticalMap();
+            if (key === 'allianceMap') activateAllianceMap();
           } else {
             map.removeLayer(l.group);
             if (key === 'planes') stopPlanes();
@@ -457,6 +461,8 @@ function buildCategoryUI() {
             if (key === 'ships') stopShips();
             if (key === 'thermal') stopThermal();
             if (key === 'burntAreas') deactivateBurntAreas();
+            if (key === 'politicalMap') deactivatePoliticalMap();
+            if (key === 'allianceMap') deactivateAllianceMap();
           }
           const el = document.querySelector(`#cnt-${key}`)?.parentElement;
           if (el) el.classList.toggle('off', !target);
@@ -480,6 +486,8 @@ function toggleLayer(key, el) {
     if (key === 'thermal') startThermal();
     if (key === 'gdeltMil') loadGdeltMil();
     if (key === 'burntAreas') activateBurntAreas();
+    if (key === 'politicalMap') activatePoliticalMap();
+    if (key === 'allianceMap') activateAllianceMap();
   } else {
     map.removeLayer(l.group);
     if (key === 'planes') stopPlanes();
@@ -487,6 +495,8 @@ function toggleLayer(key, el) {
     if (key === 'ships') stopShips();
     if (key === 'thermal') stopThermal();
     if (key === 'burntAreas') deactivateBurntAreas();
+    if (key === 'politicalMap') deactivatePoliticalMap();
+    if (key === 'allianceMap') deactivateAllianceMap();
   }
   persistLayers();
 }
@@ -1120,13 +1130,14 @@ map.on('click', async e => {
   openRegion(e.latlng.lat, e.latlng.lng);
 });
 
-async function openRegion(lat, lng, presetName) {
+async function openRegion(lat, lng, presetName, presetIso) {
   currentRegion = {lat: lat.toFixed(3), lng: lng.toFixed(3)};
   history = [];
   aiBody.innerHTML = '';
   document.getElementById('emptyState')?.remove();
   document.getElementById('aiCoords').textContent = `${currentRegion.lat}°, ${currentRegion.lng}°`;
   document.getElementById('aiRegion').textContent = presetName || 'Ermittle Region…';
+  if (presetIso) currentRegion.iso2 = presetIso;
 
   currentRegion.context = gatherContext(lat, lng);
   const parts = [];
@@ -1146,7 +1157,8 @@ async function openRegion(lat, lng, presetName) {
   aiPanel.classList.add('open');
   if (!presetName) reverseGeocode(lat, lng);
   else currentRegion.name = presetName;
-  loadCountryInfo(lat, lng);
+  // Wenn ISO bekannt, direkt Profil laden; sonst wartet auf reverseGeocode
+  if (presetIso) loadCountryInfoByIso(presetIso);
 }
 
 async function reverseGeocode(lat, lng) {
@@ -1171,23 +1183,58 @@ async function loadCountryInfo(lat, lng) {
 async function loadCountryInfoByIso(iso2) {
   const ciDiv = document.getElementById('countryInfo');
   ciDiv.classList.remove('show');
-  if (!CONFIG.USE_BACKEND) return;
-  try {
-    const r = await fetch(`${CONFIG.BACKEND_BASE}/country?iso=${iso2}`);
-    if (!r.ok) return;
-    const d = await r.json();
-    if (!d || d.error) return;
-    ciDiv.innerHTML = `
-      <div class="ci-row"><span>Bevölkerung</span><b>${fmtNum(d.population)}</b></div>
-      <div class="ci-row"><span>BIP (USD)</span><b>${fmtMoney(d.gdp)}</b></div>
-      <div class="ci-row"><span>BIP/Kopf</span><b>${fmtMoney(d.gdpPerCapita)}</b></div>
-      <div class="ci-row"><span>Militärausg. (% BIP)</span><b>${d.militaryPct ? d.militaryPct.toFixed(2)+'%' : '–'}</b></div>
-      <div class="ci-row"><span>Inflation</span><b>${d.inflation ? d.inflation.toFixed(2)+'%' : '–'}</b></div>
-      <div class="ci-row"><span>Lebenserwartung</span><b>${d.lifeExp ? d.lifeExp.toFixed(1)+' J' : '–'}</b></div>
+  let economic = null;
+  if (CONFIG.USE_BACKEND) {
+    try {
+      const r = await fetch(`${CONFIG.BACKEND_BASE}/country?iso=${iso2}`);
+      if (r.ok) {
+        const d = await r.json();
+        if (d && !d.error) {
+          economic = d;
+          currentRegion.economic = d;
+        }
+      }
+    } catch (e) { console.error('Country:', e); }
+  }
+
+  // Almanach-Profil aus countries.js
+  const profile = window.getCountryProfile?.(iso2);
+  currentRegion.profile = profile;
+
+  let html = '';
+  if (profile) {
+    html += `
+      <div class="ci-section">
+        <div class="ci-section-title">Politisches Profil <span class="ci-stand">Stand 2026</span></div>
+        ${profile.capital     ? `<div class="ci-row"><span>Hauptstadt</span><b>${profile.capital}</b></div>` : ''}
+        ${profile.govType     ? `<div class="ci-row"><span>Regierungsform</span><b>${profile.govType}</b></div>` : ''}
+        ${profile.leader      ? `<div class="ci-row ci-row-wide"><span>Führung</span><b>${profile.leader}</b></div>` : ''}
+        ${profile.ruling      ? `<div class="ci-row ci-row-wide"><span>Regierungspartei</span><b>${profile.ruling}</b></div>` : ''}
+        ${profile.nextElection? `<div class="ci-row ci-row-wide"><span>Nächste Wahl</span><b>${profile.nextElection}</b></div>` : ''}
+        ${profile.alliances?.length ? `<div class="ci-row ci-row-wide"><span>Allianzen</span><b>${profile.alliances.join(', ')}</b></div>` : ''}
+        ${profile.context     ? `<div class="ci-context">${escapeHtml(profile.context)}</div>` : ''}
+        ${profile.notes       ? `<div class="ci-note">${escapeHtml(profile.notes)}</div>` : ''}
+      </div>
     `;
-    ciDiv.classList.add('show');
-    currentRegion.economic = d;
-  } catch (e) { console.error('Country:', e); }
+  }
+  if (economic) {
+    html += `
+      <div class="ci-section">
+        <div class="ci-section-title">Wirtschaft (World Bank)</div>
+        <div class="ci-row"><span>Bevölkerung</span><b>${fmtNum(economic.population)}</b></div>
+        <div class="ci-row"><span>BIP (USD)</span><b>${fmtMoney(economic.gdp)}</b></div>
+        <div class="ci-row"><span>BIP/Kopf</span><b>${fmtMoney(economic.gdpPerCapita)}</b></div>
+        <div class="ci-row"><span>Militärausg. (% BIP)</span><b>${economic.militaryPct ? economic.militaryPct.toFixed(2)+'%' : '–'}</b></div>
+        <div class="ci-row"><span>Inflation</span><b>${economic.inflation ? economic.inflation.toFixed(2)+'%' : '–'}</b></div>
+        <div class="ci-row"><span>Lebenserwartung</span><b>${economic.lifeExp ? economic.lifeExp.toFixed(1)+' J' : '–'}</b></div>
+      </div>
+    `;
+  }
+  if (!html && iso2) {
+    html = `<div class="ci-note">Kein Almanach-Eintrag für ${iso2} - du kannst eigene Profile in localStorage unter <code>gm_country_overrides</code> ergänzen.</div>`;
+  }
+  ciDiv.innerHTML = html;
+  if (html) ciDiv.classList.add('show');
 }
 
 function fmtNum(n) { if (!n) return '–'; if (n>=1e9) return (n/1e9).toFixed(2)+' Mrd'; if (n>=1e6) return (n/1e6).toFixed(2)+' Mio'; if (n>=1e3) return (n/1e3).toFixed(1)+'k'; return n.toString(); }
@@ -1222,6 +1269,17 @@ function buildContextString() {
   if (currentRegion.economic) {
     const e = currentRegion.economic;
     lines.push(`Wirtschaftsdaten: BIP ${fmtMoney(e.gdp)}, BIP/Kopf ${fmtMoney(e.gdpPerCapita)}, Bev. ${fmtNum(e.population)}${e.militaryPct?', Mil.-Ausg. '+e.militaryPct.toFixed(2)+'% BIP':''}`);
+  }
+  if (currentRegion.profile) {
+    const p = currentRegion.profile;
+    lines.push(`POLITISCHES PROFIL (kuratiert, Stand 2026):`);
+    if (p.govType)      lines.push(` · Regierungsform: ${p.govType}`);
+    if (p.leader)       lines.push(` · Führung: ${p.leader}`);
+    if (p.ruling)       lines.push(` · Regierungspartei: ${p.ruling}`);
+    if (p.nextElection) lines.push(` · Nächste Wahl: ${p.nextElection}`);
+    if (p.alliances?.length) lines.push(` · Allianzen: ${p.alliances.join(', ')}`);
+    if (p.context)      lines.push(` · Kontext: ${p.context}`);
+    if (p.notes)        lines.push(` · Notiz: ${p.notes}`);
   }
   return lines.length ? ('\n\nLOKALER KARTENKONTEXT:\n' + lines.join('\n')) : '';
 }
@@ -1477,6 +1535,191 @@ document.getElementById('closeBriefing').onclick = () => {
 };
 document.getElementById('generateBriefing').onclick = () => generateBriefing();
 document.querySelectorAll('#briefing .chip').forEach(c => c.onclick = () => generateBriefing(c.dataset.bq));
+
+/* ════════════════════════════════════════════════════════════════
+   POLITISCHE WELTKARTE (Country-Polygone als Overlay)
+   ════════════════════════════════════════════════════════════════ */
+let countriesGeoJson = null;
+let politicalLayerInstance = null;
+let allianceLayerInstance = null;
+
+async function ensureCountriesGeoJson() {
+  if (countriesGeoJson) return countriesGeoJson;
+  try {
+    // Natural Earth 110m via jsDelivr (~250KB)
+    const res = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
+    if (!res.ok) throw new Error('Atlas fetch failed');
+    const topo = await res.json();
+    // topojson → geojson via Mini-Decoder (eingebettet)
+    countriesGeoJson = topoToGeo(topo, topo.objects.countries);
+    return countriesGeoJson;
+  } catch (e) {
+    console.warn('Atlas direct failed, try Natural Earth GeoJSON', e);
+    try {
+      const r2 = await fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson');
+      countriesGeoJson = await r2.json();
+      return countriesGeoJson;
+    } catch (e2) { console.error('GeoJSON fallback failed', e2); return null; }
+  }
+}
+
+// Minimaler TopoJSON→GeoJSON-Decoder (für world-atlas)
+function topoToGeo(topo, obj) {
+  if (!obj || obj.type !== 'GeometryCollection') return null;
+  const arcs = topo.arcs;
+  const tr = topo.transform;
+  function decodeArc(idx) {
+    const reverse = idx < 0;
+    if (reverse) idx = ~idx;
+    const arc = arcs[idx].map(p => p.slice());
+    if (tr) {
+      let x = 0, y = 0;
+      for (const p of arc) { x += p[0]; y += p[1]; p[0] = x*tr.scale[0] + tr.translate[0]; p[1] = y*tr.scale[1] + tr.translate[1]; }
+    }
+    return reverse ? arc.reverse() : arc;
+  }
+  function arcsToCoords(arcsList) {
+    const coords = [];
+    arcsList.forEach((arcIdx, i) => {
+      const a = decodeArc(arcIdx);
+      if (i > 0) a.shift();
+      coords.push(...a);
+    });
+    return coords;
+  }
+  function geom(g) {
+    if (g.type === 'Polygon') return { type:'Polygon', coordinates: g.arcs.map(arcsToCoords) };
+    if (g.type === 'MultiPolygon') return { type:'MultiPolygon', coordinates: g.arcs.map(rings => rings.map(arcsToCoords)) };
+    return null;
+  }
+  return {
+    type: 'FeatureCollection',
+    features: obj.geometries.map(g => ({
+      type:'Feature',
+      properties: g.properties || {},
+      geometry: geom(g),
+      id: g.id
+    }))
+  };
+}
+
+// ISO-numeric → ISO2 Mapping (world-atlas nutzt ISO-numeric als id)
+const ISO_NUMERIC_TO_2 = {
+  '004':'AF','008':'AL','012':'DZ','024':'AO','032':'AR','036':'AU','040':'AT','044':'BS','048':'BH','050':'BD',
+  '051':'AM','052':'BB','056':'BE','060':'BM','064':'BT','068':'BO','070':'BA','072':'BW','076':'BR','084':'BZ',
+  '090':'SB','096':'BN','100':'BG','104':'MM','108':'BI','112':'BY','116':'KH','120':'CM','124':'CA','132':'CV',
+  '140':'CF','144':'LK','148':'TD','152':'CL','156':'CN','158':'TW','170':'CO','174':'KM','178':'CG','180':'CD',
+  '188':'CR','191':'HR','192':'CU','196':'CY','203':'CZ','204':'BJ','208':'DK','214':'DO','218':'EC','222':'SV',
+  '226':'GQ','231':'ET','232':'ER','233':'EE','242':'FJ','246':'FI','250':'FR','260':'AQ','262':'DJ','266':'GA',
+  '268':'GE','270':'GM','275':'PS','276':'DE','288':'GH','296':'KI','300':'GR','308':'GD','320':'GT','324':'GN',
+  '328':'GY','332':'HT','336':'VA','340':'HN','344':'HK','348':'HU','352':'IS','356':'IN','360':'ID','364':'IR',
+  '368':'IQ','372':'IE','376':'IL','380':'IT','384':'CI','388':'JM','392':'JP','398':'KZ','400':'JO','404':'KE',
+  '408':'KP','410':'KR','414':'KW','417':'KG','418':'LA','422':'LB','426':'LS','428':'LV','430':'LR','434':'LY',
+  '438':'LI','440':'LT','442':'LU','450':'MG','454':'MW','458':'MY','462':'MV','466':'ML','470':'MT','478':'MR',
+  '480':'MU','484':'MX','492':'MC','496':'MN','498':'MD','499':'ME','504':'MA','508':'MZ','512':'OM','516':'NA',
+  '524':'NP','528':'NL','554':'NZ','558':'NI','562':'NE','566':'NG','578':'NO','586':'PK','591':'PA','598':'PG',
+  '600':'PY','604':'PE','608':'PH','616':'PL','620':'PT','624':'GW','626':'TL','630':'PR','634':'QA','642':'RO',
+  '643':'RU','646':'RW','682':'SA','686':'SN','688':'RS','690':'SC','694':'SL','702':'SG','703':'SK','704':'VN',
+  '705':'SI','706':'SO','710':'ZA','716':'ZW','724':'ES','728':'SS','729':'SD','732':'EH','740':'SR','748':'SZ',
+  '752':'SE','756':'CH','760':'SY','762':'TJ','764':'TH','768':'TG','776':'TO','780':'TT','784':'AE','788':'TN',
+  '792':'TR','795':'TM','800':'UG','804':'UA','807':'MK','818':'EG','826':'GB','834':'TZ','840':'US','854':'BF',
+  '858':'UY','860':'UZ','862':'VE','882':'WS','887':'YE','894':'ZM','531':'CW','533':'AW','535':'BQ','540':'NC',
+  '548':'VU','652':'BL','663':'MF',
+};
+
+function getCountryIso(feature) {
+  const p = feature.properties || {};
+  if (p.ISO_A2 && p.ISO_A2.length === 2) return p.ISO_A2;
+  if (p.iso_a2 && p.iso_a2.length === 2) return p.iso_a2;
+  if (feature.id) return ISO_NUMERIC_TO_2[String(feature.id).padStart(3,'0')] || null;
+  return null;
+}
+
+function countryColor(iso, mode) {
+  if (mode === 'alliance') {
+    if (!iso) return '#333';
+    // Alliance-Liste durchgehen
+    for (const a of R.actors) {
+      if (a.members?.includes(iso)) {
+        if (a.n === 'NATO') return '#1f4ec7';
+        if (a.n === 'EU')   return '#3fa3ff';
+        if (a.n === 'BRICS+') return '#e84d3d';
+        if (a.n === 'CSTO') return '#a72e5b';
+        if (a.n === 'SCO')  return '#ff9d3d';
+        if (a.n === 'AUKUS') return '#7e57c2';
+        if (a.n === 'QUAD') return '#21c7d6';
+        if (a.n === 'GCC') return '#3ecf8e';
+        if (a.n === 'ASEAN') return '#ffe14d';
+        if (a.n === 'AU') return '#0a8754';
+      }
+    }
+    return '#444';
+  }
+  // Politische Färbung nach Regierungstyp (aus countries.js)
+  const profile = window.getCountryProfile?.(iso);
+  if (!profile) return '#2a3340';
+  const g = (profile.govType || '').toLowerCase();
+  if (g.includes('absolut') && g.includes('monarchie')) return '#7a3030';
+  if (g.includes('diktatur') || g.includes('autoritär') || g.includes('einparteien')) return '#a32424';
+  if (g.includes('militärjunta') || g.includes('militär')) return '#cf4400';
+  if (g.includes('bürgerkrieg')) return '#5a0a0a';
+  if (g.includes('theokrat')) return '#7c2d8a';
+  if (g.includes('konstitutionelle monarchie')) return '#3a6c8a';
+  if (g.includes('parlamentarisch')) return '#1f7a4e';
+  if (g.includes('semi-präsi')) return '#2d8a4e';
+  if (g.includes('präsidialrepublik')) return '#2d6e8a';
+  return '#444';
+}
+
+function buildPoliticalLayer(mode) {
+  if (!countriesGeoJson) return null;
+  const layer = L.geoJSON(countriesGeoJson, {
+    style: f => ({
+      fillColor: countryColor(getCountryIso(f), mode),
+      color: '#0c1117', weight: 0.6, fillOpacity: 0.55, opacity: 0.8
+    }),
+    onEachFeature: (f, l) => {
+      const iso = getCountryIso(f);
+      const profile = window.getCountryProfile?.(iso);
+      const name = profile?.name || f.properties?.NAME || f.properties?.name || iso || '?';
+      l.on('click', (e) => {
+        L.DomEvent.stopPropagation(e);
+        openRegion(e.latlng.lat, e.latlng.lng, name, iso);
+      });
+      l.bindTooltip(name, { sticky: true, direction: 'top', className: 'leaflet-tooltip' });
+    }
+  });
+  return layer;
+}
+
+async function activatePoliticalMap() {
+  await ensureCountriesGeoJson();
+  if (!countriesGeoJson) { toast('Polygon-Daten nicht ladbar'); return; }
+  if (politicalLayerInstance) return;
+  politicalLayerInstance = buildPoliticalLayer('political');
+  if (politicalLayerInstance) {
+    LAYERS.politicalMap.group.addLayer(politicalLayerInstance);
+    politicalLayerInstance.bringToBack();
+    setCnt('politicalMap', countriesGeoJson.features.length);
+  }
+}
+function deactivatePoliticalMap() {
+  if (politicalLayerInstance) { LAYERS.politicalMap.group.removeLayer(politicalLayerInstance); politicalLayerInstance = null; }
+}
+async function activateAllianceMap() {
+  await ensureCountriesGeoJson();
+  if (!countriesGeoJson) { toast('Polygon-Daten nicht ladbar'); return; }
+  if (allianceLayerInstance) return;
+  allianceLayerInstance = buildPoliticalLayer('alliance');
+  if (allianceLayerInstance) {
+    LAYERS.allianceMap.group.addLayer(allianceLayerInstance);
+    allianceLayerInstance.bringToBack();
+    setCnt('allianceMap', countriesGeoJson.features.length);
+  }
+}
+function deactivateAllianceMap() {
+  if (allianceLayerInstance) { LAYERS.allianceMap.group.removeLayer(allianceLayerInstance); allianceLayerInstance = null; }
+}
 
 /* ════════════════════════════════════════════════════════════════
    PINS / EIGENE ANNOTATIONS
