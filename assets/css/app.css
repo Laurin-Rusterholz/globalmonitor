@@ -119,16 +119,20 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-siz
 .plane-icon.military{color:var(--planeMil);filter:drop-shadow(0 0 4px rgba(255,120,71,.8))}
 
 /* ════ TOPBAR ════ */
-#topbar{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;display:flex;gap:4px;
+#topbar{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:1000;display:flex;gap:3px;
   align-items:center;background:rgba(15,20,29,.95);backdrop-filter:blur(10px);border:1px solid var(--line-2);
-  border-radius:24px;padding:5px 6px 5px 13px;box-shadow:0 10px 36px rgba(0,0,0,.5);flex-wrap:wrap;max-width:95vw}
-#topbar .status{font-size:10.5px;color:var(--ink-dim);display:flex;align-items:center;gap:7px;white-space:nowrap}
-.dot{width:7px;height:7px;border-radius:50%;background:var(--choke)}
+  border-radius:20px;padding:4px 5px 4px 11px;box-shadow:0 10px 36px rgba(0,0,0,.5);flex-wrap:wrap;max-width:95vw}
+#topbar .status{font-size:10px;color:var(--ink-dim);display:flex;align-items:center;gap:6px;white-space:nowrap}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--choke)}
 .dot.load{background:var(--protest);animation:blink 1s infinite}
 .dot.err{background:var(--conflict)}
 @keyframes blink{50%{opacity:.3}}
-.tb-btn{background:var(--panel-2);border:1px solid var(--line-2);color:var(--ink);border-radius:16px;
-  padding:5px 10px;cursor:pointer;font-family:inherit;font-size:10px;transition:all .15s;white-space:nowrap}
+.tb-btn{background:var(--panel-2);border:1px solid var(--line-2);color:var(--ink);border-radius:14px;
+  padding:4px 8px;cursor:pointer;font-family:inherit;font-size:9.5px;transition:all .15s;white-space:nowrap}
+/* Icon-only Variante: zeigt nur Emoji, Text per .tb-label im Tooltip-Stil */
+.tb-btn.icon-only{padding:4px 7px;min-width:26px;text-align:center}
+.tb-btn .tb-label{display:none}
+@media (min-width:1400px){.tb-btn .tb-label{display:inline;margin-left:3px}}
 .tb-btn:hover{border-color:var(--accent);background:var(--panel-3)}
 .tb-btn.active{background:var(--accent);color:#000;border-color:var(--accent)}
 

@@ -1,7 +1,26 @@
 // AI-generiertes Tiefen-Dossier pro Land
 // Optional: auto-save in Netlify Blobs als Notiz vom Typ 'ai-dossier'
 
-const { getStore } = require('@netlify/blobs');
+let blobsModule, blobsImportError;
+try { blobsModule = require('@netlify/blobs'); }
+catch (e) {
+  blobsImportError = e.message;
+  console.error('@netlify/blobs nicht verfügbar:', e.message);
+}
+function getStoreSafe(name, opts = {}) {
+  if (!blobsModule) throw new Error('Blobs Package nicht installiert: ' + (blobsImportError||'?'));
+  const siteID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID;
+  const token = process.env.NETLIFY_API_TOKEN || process.env.NETLIFY_BLOBS_TOKEN;
+  try {
+    if (siteID && token) return blobsModule.getStore({ name, siteID, token, ...opts });
+    return blobsModule.getStore({ name, ...opts });
+  } catch (e) {
+    if (siteID && token) return blobsModule.getStore({ name, siteID, token, ...opts });
+    throw e;
+  }
+}
+
+const FALLBACK_MODELS = ['claude-sonnet-4-5', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-latest'];
 
 const SECTIONS = {
   full: ['profile', 'economy', 'industries', 'trade', 'military', 'doctrine', 'regionalRole', 'globalRole', 'hotspots'],
@@ -31,8 +50,21 @@ function json(obj, status = 200) {
 }
 
 exports.handler = async (event) => {
+  if (event.httpMethod === 'OPTIONS') {
+    return {
+      statusCode: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST,OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      },
+      body: '',
+    };
+  }
   if (event.httpMethod !== 'POST') return json({ error: 'POST required' }, 405);
-  if (!process.env.ANTHROPIC_API_KEY) return json({ error: 'ANTHROPIC_API_KEY fehlt' }, 500);
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return json({ error: 'ANTHROPIC_API_KEY ENV-Var fehlt in Netlify. Site-Settings → Environment Variables setzen.' }, 500);
+  }
 
   try {
     const body = JSON.parse(event.body || '{}');
@@ -73,41 +105,82 @@ ${JSON.stringify(context, null, 2)}
 
 Liefere AUSSCHLIESSLICH das JSON-Objekt.`;
 
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 2500,
-        system: sys,
-        messages: [{ role: 'user', content: userMsg }],
-      }),
-    });
-    const data = await res.json();
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    const modelChain = ['claude-sonnet-4-6', ...FALLBACK_MODELS];
+    let lastErr = null, lastStatus = null, lastDetail = '';
+    let dossier = null;
+    let usedModel = null;
 
-    let extracted = text;
-    const m = text.match(/\{[\s\S]*\}/);
-    if (m) extracted = m[0];
+    for (let i = 0; i < modelChain.length; i++) {
+      const modelName = modelChain[i];
+      try {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: modelName,
+            max_tokens: 2500,
+            system: sys,
+            messages: [{ role: 'user', content: userMsg }],
+          }),
+        });
 
-    let dossier;
-    try { dossier = JSON.parse(extracted); }
-    catch (e) { return json({ error: 'JSON-Parse fehlgeschlagen', raw: text }, 500); }
+        if (!res.ok) {
+          const errTxt = await res.text().catch(() => '');
+          lastStatus = res.status;
+          lastDetail = errTxt.slice(0, 400);
+          // Auth/Quota: kein Retry
+          if (res.status === 401) return json({ error: `API-Key ungültig (401): ${lastDetail}`, apiStatus: 401 }, 500);
+          if (res.status === 402 || /credit|balance/i.test(errTxt)) return json({ error: `Anthropic-Guthaben aufgebraucht (402): ${lastDetail}`, apiStatus: 402 }, 500);
+          if (res.status === 429) return json({ error: `Rate Limit (429): ${lastDetail}`, apiStatus: 429 }, 500);
+          // Modell unbekannt → nächstes
+          if ((res.status === 400 || res.status === 404) && /model/i.test(errTxt)) {
+            console.warn(`Dossier-Modell ${modelName} abgelehnt, nächstes…`);
+            continue;
+          }
+          // 5xx → nächstes
+          if (res.status >= 500) { console.warn(`Anthropic ${res.status} bei ${modelName}, retry…`); continue; }
+          return json({ error: `API HTTP ${res.status} (${modelName}): ${lastDetail}`, apiStatus: res.status, model: modelName }, 500);
+        }
+
+        const data = await res.json();
+        const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+        if (!text) { lastDetail = `Leere Antwort (${modelName})`; continue; }
+
+        let extracted = text;
+        const m = text.match(/\{[\s\S]*\}/);
+        if (m) extracted = m[0];
+        try { dossier = JSON.parse(extracted); usedModel = modelName; break; }
+        catch (e) { return json({ error: 'JSON-Parse fehlgeschlagen', raw: text.slice(0,400), model: modelName }, 500); }
+      } catch (e) {
+        lastErr = e;
+        console.warn(`Dossier-Fetch-Fehler (${modelName}):`, e.message);
+        continue;
+      }
+    }
+
+    if (!dossier) {
+      return json({
+        error: `Alle Modelle fehlgeschlagen: ${lastDetail || lastErr?.message || 'unbekannt'}`,
+        apiStatus: lastStatus,
+        modelsAttempted: modelChain,
+      }, 500);
+    }
 
     dossier.iso = iso;
     dossier.countryName = countryName;
     dossier.scope = scope;
     dossier.generated = new Date().toISOString();
-    dossier.model = 'claude-sonnet-4-6';
+    dossier.model = usedModel;
+    if (usedModel !== modelChain[0]) dossier.fallbackUsed = `${modelChain[0]} → ${usedModel}`;
 
-    // Auto-save als Notiz
+    // Auto-save als Notiz - darf NICHT die ganze Function killen, wenn Blobs fehlen
     if (save) {
       try {
-        const store = getStore({ name: 'country-notes', consistency: 'strong' });
+        const store = getStoreSafe('country-notes', { consistency: 'strong' });
         const id = `${iso}/${Date.now()}_dossier_${scope}`;
         const note = {
           iso, title: `${SECTION_LABELS[scope] || 'Dossier'}: ${countryName}`,
@@ -128,6 +201,6 @@ Liefere AUSSCHLIESSLICH das JSON-Objekt.`;
 
     return json(dossier);
   } catch (e) {
-    return json({ error: e.message }, 500);
+    return json({ error: 'Unerwarteter Fehler: ' + e.message, stack: (e.stack||'').split('\n').slice(0,3).join(' | ') }, 500);
   }
 };

@@ -98,6 +98,7 @@ exports.handler = async (event) => {
 
   const events = [];
   const errors = [];
+  let rateLimited = false;
   const gdeltTs = GDELT_TIMESPAN[timespan] || '72hours';
 
   await Promise.all(QUERIES.map(async item => {
@@ -148,11 +149,18 @@ exports.handler = async (event) => {
       });
     } catch (docErr) {
       errors.push(`${item.c}:doc:${docErr.message.slice(0,60)}`);
+      if (/429|rate/i.test(docErr.message)) rateLimited = true;
     }
   }));
 
+  // Bei Rate-Limit + leerem Result: lieber stale cache servieren als leere Karte
+  if (events.length === 0 && rateLimited && slot) {
+    return json({ ...slot.data, _staleCacheUsed: true, _staleAgeMs: Date.now() - slot.time, errors });
+  }
+
   const data = { events, errors, mode:'span', timespan, updated: new Date().toISOString(), sources: { hasGeo: events.some(e=>e.src==='geo'), hasDoc: events.some(e=>e.src==='doc') } };
-  cacheByWindow[cacheKey] = { data, time: Date.now() };
+  // Nur cachen wenn nicht-leer (sonst überschreiben wir den letzten guten Stand)
+  if (events.length > 0) cacheByWindow[cacheKey] = { data, time: Date.now() };
   return json(data);
 };
 

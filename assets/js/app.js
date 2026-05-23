@@ -4465,7 +4465,25 @@ function renderProjMaps(body) {
     body.innerHTML = '<div class="conn-empty">Layer noch nicht geladen.</div>';
     return;
   }
-  let html = `<div style="margin-bottom:12px;display:flex;gap:6px;flex-wrap:wrap">
+  // Basemap-Auswahl (Vektor, Satellit etc.) - normal in der Sidebar versteckt im Projektmodus
+  const basemaps = [
+    { key: 'dark', label: 'Dunkel' },
+    { key: 'sat', label: 'Esri-Sat' },
+    { key: 'nasa', label: 'NASA-Tag' },
+    { key: 'nasahd', label: 'NASA-HD' },
+    { key: 'terrain', label: 'Vektor' },
+    { key: 'topo', label: 'Topo' },
+  ];
+  const currentBase = (typeof activeBaseKey !== 'undefined') ? activeBaseKey : 'dark';
+  let html = `<div class="proj-section" style="padding:10px 12px;margin-bottom:12px">
+    <h4 style="font-size:11.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin-bottom:8px">
+      🗺 Karten-Stil
+    </h4>
+    <div class="basemap-row" id="projBasemapRow" style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:0">
+      ${basemaps.map(b => `<div class="basemap-btn${b.key === currentBase ? ' active' : ''}" data-pbase="${b.key}" style="flex:1;min-width:70px;text-align:center;padding:7px 6px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);cursor:pointer;font-size:10.5px;color:var(--ink-dim)">${b.label}</div>`).join('')}
+    </div>
+  </div>`;
+  html += `<div style="margin-bottom:12px;display:flex;gap:6px;flex-wrap:wrap">
     <button class="tb-btn" id="projMapsAllOn">✓ Alle Karten an</button>
     <button class="tb-btn" id="projMapsAllOff">✕ Alle Karten aus</button>
     <button class="tb-btn" id="projMapsReset">↺ Default</button>
@@ -4549,6 +4567,18 @@ function renderProjMaps(body) {
     });
     renderProjMaps(body);
   };
+  // Basemap-Wechsel: direkt switchBase aufrufen (Sidebar ist im Projektmodus display:none,
+  // .click() darauf funktioniert, aber wir gehen sicherer den direkten Weg)
+  body.querySelectorAll('[data-pbase]').forEach(btn => {
+    btn.onclick = () => {
+      const key = btn.dataset.pbase;
+      const sidebarBtn = document.querySelector(`.basemap-btn[data-base="${key}"]`);
+      if (typeof switchBase === 'function' && sidebarBtn) {
+        switchBase(key, sidebarBtn);
+      }
+      body.querySelectorAll('[data-pbase]').forEach(b => b.classList.toggle('active', b === btn));
+    };
+  });
 }
 
 function renderProjOverview(body) {
