@@ -5145,11 +5145,11 @@ async function runProjectAnalysis(forceWeb = false) {
   const btn = document.getElementById('rerunAnalysis');
   const origBtnText = btn?.textContent;
   if (btn) { btn.disabled = true; }
-  // Aggressiv begrenzt (kleinerer Prompt = schnellere Anthropic-Antwort = passt in 10s-Sync)
+  // Netlify Pro: 26s Sync-Budget, mehr Kontext erlaubt für bessere Analyse
   const recentEvents = [];
-  (conflictStore || []).slice(0, 5).forEach(e => recentEvents.push(`Konflikt: ${e.n}`));
-  (osintStore || []).slice(0, 3).forEach(it => recentEvents.push(`OSINT: ${it.title?.slice(0,80)}`));
-  (R?.militaryActions || []).slice(0, 3).forEach(a => recentEvents.push(`Mil: ${a.n}`));
+  (conflictStore || []).slice(0, 20).forEach(e => recentEvents.push(`Konflikt: ${e.n}${e.i?' - '+e.i.slice(0,60):''}`));
+  (osintStore || []).slice(0, 10).forEach(it => recentEvents.push(`OSINT [${it.source}]: ${it.title}`));
+  (R?.militaryActions || []).slice(0, 8).forEach(a => recentEvents.push(`Mil-Aktion: ${a.n} (${a.since}) - ${a.d}`));
 
   let data = null;
   let bgErr = null;

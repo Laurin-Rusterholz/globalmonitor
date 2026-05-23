@@ -1,8 +1,6 @@
-// Synchrone Projekt-Analyse
-// Schlankes Prompt + Haiku für Speed
+// Synchrone Projekt-Analyse - Netlify Pro (26s sync timeout)
+// Primary: Sonnet 4.6 für Tiefe, Haiku als Fallback wenn Sonnet abgelehnt/timed-out
 // Bei Fehler: detaillierte Fehlermeldung statt 500-Blackbox
-// Timeout in netlify.toml auf 26s gesetzt (Pro) bzw. 10s auf Free.
-// Wenn Sonnet/Haiku fehlschlägt (z.B. Modell nicht verfügbar) → automatischer Fallback.
 
 const PRIMARY_HAIKU = 'claude-haiku-4-5-20251001';
 const PRIMARY_SONNET = 'claude-sonnet-4-6';
@@ -30,39 +28,38 @@ exports.handler = async (event) => {
     const { thesis, baseCountries = [], webSearch = false, recentEvents = [] } = body;
     if (!thesis) return json({ error: 'thesis required' }, 400);
 
-    // Aggressive Kürzung: max 4 Events, je 80 Zeichen. Spart Tokens → schnellere Antwort.
     const eventsHint = recentEvents.length
-      ? `\nLive-Events: ${recentEvents.slice(0, 4).map(e => String(e).slice(0,80)).join(' | ')}`
+      ? `\nAktuelle Live-Ereignisse: ${recentEvents.slice(0, 15).join('; ').slice(0, 1200)}`
       : '';
 
-    // Ultra-knapper System-Prompt für Speed (Netlify Free 10s Hard-Limit)
-    const sys = `Geopolitik-Analyst. Antworte NUR mit JSON:
-{"summary":"1 Satz","countries":[{"iso":"DE","role":"primary|secondary|target|beneficiary|loser","reason":"kurz"}],"actors":[{"name":"NATO","type":"alliance|state|ngo|other","role":"kurz"}],"thesisStrength":"high|medium|low","contextHints":["max 3"],"openQuestions":["max 3"]}
-ISO 2-Buchst. Max 10 Länder, 4 Akteure.`;
+    const sys = `Du bist ein präziser geopolitischer Analyst. Analysiere die These umfassend.
+Antworte AUSSCHLIESSLICH mit JSON:
+{
+  "summary": "1-2 Sätze: Kontext und Kern-These",
+  "countries": [{"iso":"DE", "role":"primary|secondary|target|beneficiary|loser|bystander", "intensity":"high|medium|low", "reason":"1 Satz: warum betroffen"}],
+  "actors": [{"name":"NATO", "type":"alliance|state|ngo|company|other", "role":"1 Satz: welche Rolle", "stake":"was steht für sie auf dem Spiel"}],
+  "thesisStrength": "high|medium|low",
+  "contextHints": ["wichtige Kontext-Punkte (max 5)"],
+  "openQuestions": ["zentrale offene Fragen (max 5)"]
+}
+ISO-Codes 2-Buchstaben. Liste alle direkt+indirekt betroffenen Länder (max 20). Akteure max 8.`;
 
-    const userMsg = `These: ${String(thesis).slice(0, 400)}
-${baseCountries.length ? `Basis: ${baseCountries.slice(0,10).join(',')}` : ''}${eventsHint}
-JSON.`;
+    const userMsg = `These: ${thesis}
+${baseCountries.length ? `Basis-Länder vorgewählt: ${baseCountries.join(',')}` : ''}${eventsHint}
 
-    // WICHTIG: Netlify Free killt Functions nach 10s hart. Wenn wir eine Chain
-    // mit mehreren 7.5s-Abort-Versuchen durchspielen, killt Netlify die Function
-    // OHNE Response-Body → Client sieht 500 ohne Diagnose. Daher Strategie:
-    //
-    // 1) NUR EIN VERSUCH mit dem schnellsten Modell (Haiku), 8s Abort
-    // 2) Modell-Fallback NUR bei FAST-Errors (400/404 mit "model unknown"),
-    //    weil die kommen instant zurück - dann hat man noch Zeit für Retry
-    // 3) Bei AbortError (Modell zu langsam): SOFORT raus mit Timeout-Fehler,
-    //    KEIN nächster Versuch (würde Netlify-Kill provozieren)
-    //
-    // webSearch wird im Sync-Modus IGNORIERT (zu langsam für 10s-Limit).
-    // Wenn User Web-Suche will: muss Background-Function nutzen (Blobs erforderlich).
-    const primary = PRIMARY_HAIKU; // immer Haiku im Sync, Speed > Tiefe
-    const fastFallback = ['claude-haiku-4-5', 'claude-3-5-haiku-latest']; // Fast-fail-Chain bei Modell-unbekannt
+Beziehe die Live-Ereignisse ein. JSON liefern.`;
 
-    const modelChain = [primary, ...fastFallback];
-    // 7.5s Abort: Mit max_tokens:400 + lean prompt sollte Haiku in 2-4s antworten.
-    // Budget: 7.5s API + ~1.5s cold/response = ~9s, sicher unter 10s.
-    const perAttemptAbortMs = 7500;
+    // Netlify Pro: 26s sync timeout (in netlify.toml gesetzt). Budget für Sonnet primary +
+    // ggf. 1 schneller Haiku-Fallback bei Sonnet-Timeout. Track elapsed time, jeder weitere
+    // Versuch bekommt nur das verbleibende Budget (- Buffer).
+    const HARD_LIMIT_MS = 24000; // 26s Netlify - 2s Sicherheitspuffer für Response-Return
+    const startMs = Date.now();
+    const remainingMs = () => HARD_LIMIT_MS - (Date.now() - startMs);
+
+    const primary = PRIMARY_SONNET; // Pro: Sonnet primary für Qualität
+    const modelChain = [primary, PRIMARY_HAIKU, ...FALLBACK_MODELS];
+    // Sonnet: 16s erstabort. Falls Timeout → Haiku mit Restbudget ~6.5s (genug für Haiku).
+    const firstAttemptAbortMs = 16000;
 
     let lastStatus = null;
     let lastErrBody = '';
@@ -72,14 +69,30 @@ JSON.`;
       const modelName = modelChain[i];
       const reqBody = {
         model: modelName,
-        // 400 statt 800 → Haiku 4.5 schafft ~300 tok/sec, also 1.5s pure Generation
-        max_tokens: 400,
+        // Pro: 1500 Tokens für volle Sonnet-Antwort mit allen Sektionen
+        max_tokens: 1500,
         system: sys,
         messages: [{ role: 'user', content: userMsg }],
       };
+      // Web-Search nur bei erstem Sonnet-Versuch (Haiku-Modelle unterstützen kein web_search)
+      if (webSearch && i === 0 && modelName.includes('sonnet')) {
+        reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }];
+      }
+
+      // Erster Versuch bekommt 18s; nachfolgende nur das was vom 24s-Hard-Budget übrig ist
+      const attemptBudget = i === 0 ? firstAttemptAbortMs : Math.min(remainingMs() - 1500, 15000);
+      if (attemptBudget < 3000) {
+        // Nicht mehr genug Zeit für ein weiteres Anthropic-Call
+        return json({
+          error: `KI-Anfrage zu langsam (Sonnet timed out, kein Budget für Fallback). These verkürzen.`,
+          timeout: true,
+          model: modelChain[i-1] || primary,
+          modelsAttempted: modelChain.slice(0, i)
+        }, 500);
+      }
 
       const ctrl = new AbortController();
-      const tHandle = setTimeout(() => ctrl.abort(), perAttemptAbortMs);
+      const tHandle = setTimeout(() => ctrl.abort(), attemptBudget);
       let apiRes;
       try {
         apiRes = await fetch('https://api.anthropic.com/v1/messages', {
@@ -95,9 +108,15 @@ JSON.`;
       } catch (e) {
         clearTimeout(tHandle);
         if (e.name === 'AbortError') {
-          // KEIN Retry! Hier ist die Function in <2s vor Netlify-Kill.
+          // Auf Pro: bei Timeout des Primary kann Haiku noch versuchen
+          // (Sonnet 18s + Haiku 6s = 24s, passt in 26s Budget)
+          if (i < modelChain.length - 1 && remainingMs() > 3500) {
+            console.warn(`Modell ${modelName} timed out nach ${attemptBudget/1000}s, versuche ${modelChain[i+1]} mit Restbudget…`);
+            usedFallback = true;
+            continue;
+          }
           return json({
-            error: `KI-Anfrage zu langsam (Abort nach ${perAttemptAbortMs/1000}s, Modell ${modelName}). These verkürzen oder Background-Modus (Blobs) aktivieren.`,
+            error: `KI-Anfrage zu langsam (Abort nach ${attemptBudget/1000}s, Modell ${modelName}). These verkürzen oder Background-Modus nutzen.`,
             timeout: true,
             model: modelName,
           }, 500);
@@ -134,7 +153,7 @@ JSON.`;
 
       parsed.generated = new Date().toISOString();
       parsed.model = modelName;
-      parsed.webSearchUsed = false; // sync hat nie web_search
+      parsed.webSearchUsed = !!webSearch && i === 0 && modelName.includes('sonnet');
       if (usedFallback) parsed.fallbackUsed = `${primary} → ${modelName}`;
       return json(parsed);
     }
