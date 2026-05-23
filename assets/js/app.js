@@ -739,7 +739,10 @@ async function loadConflicts() {
       const res = await fetch(`${CONFIG.BACKEND_BASE}/conflicts?timespan=${encodeURIComponent(timeWindow)}`);
       if (!res.ok) throw new Error('HTTP '+res.status);
       const data = await res.json();
-      if (data.errors?.length) console.warn('Conflict-Backend-Errors:', data.errors);
+      if (data.errors?.length) {
+        console.warn('Conflict-Backend-Errors:');
+        data.errors.forEach(e => console.warn(' →', e));
+      }
       placeConflicts(data.events || []);
       if (conflictStore.length === 0) {
         // GDELT lieferte leer - fallback auf Demo damit etwas sichtbar ist
@@ -1822,22 +1825,22 @@ let allianceLayerInstance = null;
 
 async function ensureCountriesGeoJson() {
   if (countriesGeoJson) return countriesGeoJson;
+  // Natural Earth zuerst - splittet Russland korrekt am Antimeridian
   try {
-    // Natural Earth 110m via jsDelivr (~250KB)
+    const r = await fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson');
+    if (r.ok) {
+      countriesGeoJson = await r.json();
+      return countriesGeoJson;
+    }
+  } catch (e) { console.warn('NE GeoJSON failed:', e); }
+  // Fallback: world-atlas TopoJSON (kann Antimeridian-Artefakte zeigen)
+  try {
     const res = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
     if (!res.ok) throw new Error('Atlas fetch failed');
     const topo = await res.json();
-    // topojson → geojson via Mini-Decoder (eingebettet)
     countriesGeoJson = topoToGeo(topo, topo.objects.countries);
     return countriesGeoJson;
-  } catch (e) {
-    console.warn('Atlas direct failed, try Natural Earth GeoJSON', e);
-    try {
-      const r2 = await fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson');
-      countriesGeoJson = await r2.json();
-      return countriesGeoJson;
-    } catch (e2) { console.error('GeoJSON fallback failed', e2); return null; }
-  }
+  } catch (e2) { console.error('Polygon-Fallback failed', e2); return null; }
 }
 
 // Minimaler TopoJSON→GeoJSON-Decoder (für world-atlas)
@@ -2870,6 +2873,64 @@ function renderConnectionsTab(body) {
     Handelspartner-Daten kommen aus AI-generierten Dossiers (falls vorhanden).
   </div>`;
 
+  // ═══ Letzte Sichtungen / Aktivitäten im Land/in der Nähe ═══
+  const centerCoord = R?.countryCenters?.[iso];
+  const activityRadius = 800; // km
+  const events = [];
+
+  if (centerCoord) {
+    const [cLat, cLng] = centerCoord;
+    // Aus allen Live-Stores Events in Reichweite sammeln
+    conflictStore.forEach(e => {
+      if (distanceKm(cLat, cLng, e.la, e.lo) < activityRadius) {
+        events.push({ type:'conflict', icon:'⚔', name:e.n, info:e.i, la:e.la, lo:e.lo, time:'aktiv' });
+      }
+    });
+    thermalStore.forEach(f => {
+      if (distanceKm(cLat, cLng, f.la, f.lo) < activityRadius) {
+        events.push({ type:'thermal', icon:'🔥', name:`Thermal ${Math.round(f.bright)}K`, info:f.region||'', la:f.la, lo:f.lo, time:f.date||'kürzlich' });
+      }
+    });
+    gdeltMilStore.forEach(e => {
+      if (distanceKm(cLat, cLng, e.la, e.lo) < activityRadius) {
+        events.push({ type:'gdeltMil', icon:'🪖', name:e.n, info:e.i, la:e.la, lo:e.lo, time:'aktiv' });
+      }
+    });
+    milPlaneStore.forEach(p => {
+      if (p.la && p.lo && distanceKm(cLat, cLng, p.la, p.lo) < activityRadius) {
+        events.push({ type:'milPlane', icon:'✈', name:p.callsign||p.icao, info:`Militärflug aus ${p.country||'?'}`, la:p.la, lo:p.lo, time:'jetzt live' });
+      }
+    });
+    R.militaryActions?.forEach(a => {
+      if (distanceKm(cLat, cLng, a.la, a.lo) < activityRadius) {
+        events.push({ type:'action', icon:'⚔', name:a.n, info:a.d, la:a.la, lo:a.lo, time:`seit ${a.since}` });
+      }
+    });
+  }
+
+  html += `<div class="conn-section"><h4>🔔 Letzte Sichtungen & Aktivitäten (Radius ${activityRadius}km) <span class="src-badge src-live">${events.length} Events</span></h4>`;
+  if (events.length) {
+    html += `<div class="activity-list">`;
+    events.slice(0, 30).forEach(e => {
+      html += `<div class="activity-item" data-la="${e.la}" data-lo="${e.lo}">
+        <div class="activity-icon">${e.icon}</div>
+        <div class="activity-body">
+          <div class="activity-name">${escapeHtml(e.name)}</div>
+          ${e.info ? `<div class="activity-info">${escapeHtml(String(e.info).slice(0,140))}</div>` : ''}
+          <div class="activity-meta">${e.type} · ${e.time} · ${e.la.toFixed(1)},${e.lo.toFixed(1)}</div>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+    if (events.length > 30) html += `<div style="font-size:10px;color:var(--ink-faint);padding:8px 0">+ ${events.length-30} weitere</div>`;
+  } else if (!centerCoord) {
+    html += `<div class="conn-empty">Keine Land-Koordinaten verfügbar - aktiviere Konflikt-/Thermal-/Mil-Layer um Aktivitäten zu erfassen</div>`;
+  } else {
+    html += `<div class="conn-empty">Keine Aktivitäten in ${activityRadius}km Radius (Konflikt-, Thermal-, GDELT-Mil-, Mil-Flug- und statische Mil-Aktions-Layer einbeziehen). Aktiviere Layer falls aus.</div>`;
+  }
+  html += `</div>`;
+
+
   // Allies durch gemeinsame Allianzen
   const allyMap = new Map();
   if (R?.actors) {
@@ -2933,6 +2994,14 @@ function renderConnectionsTab(body) {
   }
 
   body.innerHTML = html;
+  // Activity-Items: Klick fliegt zur Position
+  body.querySelectorAll('.activity-item').forEach(el => {
+    el.onclick = () => {
+      const la = +el.dataset.la, lo = +el.dataset.lo;
+      document.getElementById('countryDossierModal').classList.remove('open');
+      map.flyTo([la, lo], 7, {duration: 0.8});
+    };
+  });
 }
 
 // Dossier-Modal-Action-Buttons
@@ -3264,6 +3333,7 @@ async function toggleCompareCountry(iso, name) {
   }
 }
 
+let _lastBasketCount = 0;
 function renderBasket() {
   const basket = document.getElementById('compareBasket');
   const chips = document.getElementById('cmpChips');
@@ -3272,6 +3342,7 @@ function renderBasket() {
   cnt.textContent = comparedCountries.length;
   if (comparedCountries.length === 0) {
     basket.classList.remove('show');
+    _lastBasketCount = 0;
     return;
   }
   basket.classList.add('show');
@@ -3280,6 +3351,15 @@ function renderBasket() {
   `).join('');
   chips.querySelectorAll('.x').forEach(x => x.onclick = () => toggleCompareCountry(x.dataset.iso, comparedCountries.find(c=>c.iso===x.dataset.iso)?.name||x.dataset.iso));
   openBtn.disabled = comparedCountries.length < 2;
+  // Auto-Compare beim Erreichen von 2 Ländern (nur einmal)
+  if (comparedCountries.length >= 2 && _lastBasketCount < 2) {
+    setTimeout(() => openComparePanel(), 300);
+  }
+  // Wenn Compare-Panel offen ist, aktualisieren
+  if (document.getElementById('comparePanel')?.classList.contains('open')) {
+    setTimeout(() => { refreshCompareDataIfStale().then(renderComparePanel); }, 100);
+  }
+  _lastBasketCount = comparedCountries.length;
 }
 
 document.getElementById('cmpClearAll')?.addEventListener('click', () => {

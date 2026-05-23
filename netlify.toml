@@ -1,3 +1,21 @@
 [build]
-     functions = "netlify/functions"
-     publish = "."
+  functions = "netlify/functions"
+  publish = "."
+
+[functions]
+  node_bundler = "esbuild"
+
+[functions.ai]
+  timeout = 60
+
+[functions.dossier]
+  timeout = 60
+
+[functions.aiupdate]
+  timeout = 30
+
+[functions.wikidata]
+  timeout = 15
+
+[functions.conflicts]
+  timeout = 15
