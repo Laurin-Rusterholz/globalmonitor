@@ -479,6 +479,52 @@ select.tb-btn{appearance:none;padding-right:24px;background-image:linear-gradien
 .popup-source a{color:var(--ink-dim);text-decoration:none}
 .popup-source a:hover{color:var(--accent)}
 
+/* ════ ORGANISATIONEN-BROWSER ════ */
+.org-filters{display:grid;grid-template-columns:1fr 180px;gap:9px;margin-bottom:14px}
+.org-filters input,.org-filters select{background:var(--panel-2);border:1px solid var(--line);
+  color:var(--ink);border-radius:6px;padding:9px 12px;font-family:inherit;font-size:12px}
+.org-filters input:focus,.org-filters select:focus{outline:none;border-color:var(--accent)}
+.org-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;max-height:65vh;overflow-y:auto;padding-right:5px}
+.org-card{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:11px 13px;cursor:pointer;
+  transition:border-color .15s,background .15s}
+.org-card:hover{border-color:var(--accent);background:var(--panel-3)}
+.org-card-head{display:flex;justify-content:space-between;gap:9px;margin-bottom:5px;align-items:flex-start}
+.org-card-name{font-family:var(--font-display);font-size:13px;color:var(--ink);line-height:1.2;flex:1}
+.org-card-type{font-size:9px;text-transform:uppercase;letter-spacing:.1em;padding:2px 7px;border-radius:3px;font-weight:600;white-space:nowrap}
+.org-type-political{background:rgba(33,199,214,.2);color:var(--accent)}
+.org-type-military{background:rgba(255,93,162,.2);color:#ff5da2}
+.org-type-economic{background:rgba(62,207,142,.2);color:var(--choke)}
+.org-type-judicial{background:rgba(199,125,255,.2);color:var(--pipeline-oil)}
+.org-type-humanitarian{background:rgba(255,200,61,.2);color:var(--protest)}
+.org-type-specialized{background:rgba(127,176,255,.2);color:#7fb0ff}
+.org-card-desc{font-size:10.5px;color:var(--ink-dim);line-height:1.5;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.org-card-meta{font-size:9.5px;color:var(--ink-faint);margin-top:5px;letter-spacing:.04em}
+
+/* ════ ORG-PROFIL ════ */
+.op-section{margin-bottom:18px}
+.op-section h4{font-family:var(--font-display);font-size:12.5px;color:var(--accent);
+  text-transform:uppercase;letter-spacing:.1em;margin-bottom:9px;padding-bottom:5px;border-bottom:1px solid var(--line)}
+.op-row{display:flex;justify-content:space-between;padding:5px 0;font-size:12px;color:var(--ink-dim)}
+.op-row b{color:var(--ink);font-family:var(--font-display);font-weight:normal;text-align:right}
+.op-role{background:linear-gradient(90deg,rgba(255,200,61,.12),transparent);border-left:3px solid var(--protest);
+  padding:11px 14px;border-radius:0 6px 6px 0;margin-bottom:14px;font-size:12.5px;line-height:1.6}
+.op-role b{color:var(--protest);font-family:var(--font-display);font-weight:normal}
+.op-members-grid{display:flex;flex-wrap:wrap;gap:5px}
+.op-member{background:var(--panel-3);border:1px solid var(--line);border-radius:14px;padding:5px 10px 5px 9px;
+  font-size:11.5px;display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--ink)}
+.op-member:hover{border-color:var(--accent)}
+.op-member .fl{font-size:13px}
+
+/* Country-Profile: Org-Chips */
+.ci-org-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
+.ci-org-chip{background:var(--panel-3);border:1px solid var(--line);border-radius:11px;padding:3px 9px;
+  font-size:10.5px;cursor:pointer;color:var(--ink);transition:border-color .15s}
+.ci-org-chip:hover{border-color:var(--accent);color:var(--accent)}
+.ci-org-chip.type-military{border-left:2px solid #ff5da2}
+.ci-org-chip.type-economic{border-left:2px solid var(--choke)}
+.ci-org-chip.type-political{border-left:2px solid var(--accent)}
+
 /* ════ PROJEKT-PANEL (Recherche-Projekt aktiv) ════ */
 #projectPanel{position:absolute;top:0;right:0;height:100vh;width:520px;background:var(--panel);
   border-left:2px solid var(--protest);z-index:1195;transform:translateX(100%);

@@ -57,6 +57,7 @@
       <button class="tb-btn" id="notifyBtn">🔔 Briefing-Alarm</button>
       <button class="tb-btn" id="sourcesBtn">ℹ Quellen</button>
       <button class="tb-btn" id="researchBtn">🗃 Recherche</button>
+      <button class="tb-btn" id="orgsBtn">🏛 Orgs</button>
       <button class="tb-btn" id="newProjectBtn" style="background:var(--accent);color:#000;border-color:var(--accent)">＋ Projekt</button>
       <select class="tb-btn" id="timeWindow" title="Zeitfenster für Konflikt-Live-Daten">
         <option value="1d">24h</option>
@@ -96,6 +97,7 @@
       <div class="ctx-coord" id="ctxCoord"></div>
       <div class="ctx-item" data-act="profile">🌍 Land-Vollprofil öffnen</div>
       <div class="ctx-item" data-act="compare">➕ Zum Vergleich</div>
+      <div class="ctx-item" data-act="project">🔬 Neues Projekt zu dieser Region</div>
       <div class="ctx-item" data-act="ai">💬 KI-Chat zu dieser Region</div>
       <div class="ctx-item" data-act="pin">📌 Pin hier setzen</div>
       <div class="ctx-item" data-act="measure">📏 Distanz von hier messen</div>
@@ -222,6 +224,52 @@
       <button class="dossier-tab" data-tab="connections">🔗 Verbindungen</button>
     </div>
     <div class="dossier-body" id="cdBody"></div>
+  </div>
+</div>
+
+<!-- Organisations-Browser-Modal -->
+<div id="orgBrowserModal" class="modal">
+  <div class="modal-box modal-wide">
+    <div class="modal-head">
+      <h2>🏛 Internationale Organisationen</h2>
+      <button class="closeBtn" data-close="orgBrowserModal">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="org-filters">
+        <input id="orgSearch" type="text" placeholder="Suche: NATO, UN, OPEC, IAEA…" autofocus>
+        <select id="orgTypeFilter">
+          <option value="">Alle Typen</option>
+          <option value="political">Politisch</option>
+          <option value="military">Militär</option>
+          <option value="economic">Wirtschaft</option>
+          <option value="judicial">Justiz</option>
+          <option value="humanitarian">Humanitär</option>
+          <option value="specialized">Spezial</option>
+        </select>
+      </div>
+      <div id="orgList" class="org-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Organisations-Profil-Modal -->
+<div id="orgProfileModal" class="modal">
+  <div class="modal-box dossier-box">
+    <div class="dossier-head">
+      <div class="dossier-head-main">
+        <div class="dossier-flag" id="opIcon">🏛</div>
+        <div>
+          <h2 id="opName">Organisation</h2>
+          <div class="dossier-meta" id="opMeta"></div>
+        </div>
+      </div>
+      <div class="dossier-actions">
+        <button class="tb-btn" id="opAiAnalysis" title="KI-Analyse">🤖 KI-Analyse</button>
+        <button class="tb-btn" id="opWebsite" title="Website öffnen">🔗 Website</button>
+        <button class="closeBtn" data-close="orgProfileModal">×</button>
+      </div>
+    </div>
+    <div class="dossier-body" id="opBody"></div>
   </div>
 </div>
 
@@ -455,6 +503,7 @@
 <script src="assets/data/reference.js"></script>
 <script src="assets/data/sources.js"></script>
 <script src="assets/data/countries.js"></script>
+<script src="assets/data/organizations.js"></script>
 <script src="assets/js/app.js"></script>
 </body>
 </html>

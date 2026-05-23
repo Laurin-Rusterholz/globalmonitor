@@ -63,7 +63,7 @@ function syncUrl() {
    PANEL-MANAGER (Mutual Exclusion)
    ════════════════════════════════════════════════════════════════ */
 const SIDE_PANELS = ['ai', 'osint', 'briefing', 'comparePanel', 'pinPanel', 'researchPanel', 'projectPanel'];
-const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal', 'newProjectModal', 'projectNoteModal'];
+const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal', 'newProjectModal', 'projectNoteModal', 'orgBrowserModal', 'orgProfileModal'];
 
 function openSidePanel(id) {
   SIDE_PANELS.forEach(p => {
@@ -1386,9 +1386,23 @@ function renderCountryInfo(iso2, profile, economic, live) {
   if (ruling) html += `<div class="ci-row ci-row-wide"><span>Regierungspartei ${srcBadge(aiUp?.ruling?'ai':'static')}</span><b>${escapeHtml(ruling)}</b></div>`;
   if (election)html+= `<div class="ci-row ci-row-wide"><span>Nächste Wahl ${srcBadge(aiUp?.nextElection?'ai':'static')}</span><b>${escapeHtml(election)}</b></div>`;
   if (profile?.alliances?.length) html += `<div class="ci-row ci-row-wide"><span>Allianzen ${srcBadge('static')}</span><b>${profile.alliances.join(', ')}</b></div>`;
+  // Org-Chips (klickbar)
+  const orgsCi = (window.getOrgsForCountry?.(iso2) || []);
+  if (orgsCi.length) {
+    html += `<div class="ci-row ci-row-wide"><span>🏛 Organisationen (${orgsCi.length})</span>
+      <div class="ci-org-chips" style="margin-top:3px">`;
+    orgsCi.forEach(o => {
+      const k = o.key || o.name;
+      html += `<div class="ci-org-chip type-${o.type||'political'}" data-org-side="${escapeHtml(k)}" title="${escapeHtml(o.desc||'')}">${escapeHtml(o.name)}</div>`;
+    });
+    html += `</div></div>`;
+  }
   if (live?.memberships?.length) {
-    const mems = live.memberships.slice(0,8).join(', ');
-    html += `<div class="ci-row ci-row-wide"><span>Mitgliedschaften ${srcBadge('live')}</span><b>${escapeHtml(mems)}</b></div>`;
+    const additional = live.memberships.filter(m => !orgsCi.find(o => (o.name||'').toLowerCase().includes(m.toLowerCase().slice(0,8))));
+    if (additional.length) {
+      const mems = additional.slice(0,6).join(', ');
+      html += `<div class="ci-row ci-row-wide"><span>Weitere (Wikidata) ${srcBadge('live')}</span><b style="font-size:11px;color:var(--ink-dim)">${escapeHtml(mems)}</b></div>`;
+    }
   }
   html += `</div>`;
 
@@ -1447,6 +1461,14 @@ function renderCountryInfo(iso2, profile, economic, live) {
   });
   document.getElementById('newNoteBtn')?.addEventListener('click', () => openNoteModal(iso2, name));
   loadNotesForCountry(iso2);
+  // Org-Chips klickbar im Sidemenu
+  ciDiv.querySelectorAll('.ci-org-chip[data-org-side]').forEach(chip => {
+    chip.onclick = (e) => {
+      e.stopPropagation();
+      const k = chip.dataset.orgSide;
+      if (window.ORGS?.[k]) window.openOrgProfile(k);
+    };
+  });
 }
 
 async function doAiUpdate(iso2) {
@@ -2563,6 +2585,20 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(item => {
         } catch { toast('Land-Erkennung fehlgeschlagen'); }
         break;
       }
+      case 'project': {
+        // Reverse-Geocode für Land, dann neues Projekt mit Land vorausgefüllt
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=5&accept-language=de`);
+          const d = await r.json();
+          const iso = d.address?.country_code?.toUpperCase();
+          const name = d.address?.country;
+          openNewProjectModal('', iso ? [iso] : []);
+          if (name) {
+            document.getElementById('newProjThesis').placeholder = `z.B. Wie wirkt sich [Ereignis] auf ${name} und seine Verbündeten aus?`;
+          }
+        } catch { openNewProjectModal(); }
+        break;
+      }
       case 'ai':
         openRegion(lat, lng);
         break;
@@ -2693,11 +2729,24 @@ function renderOverviewTab(body) {
   if (profile?.nextElection) html += `<div class="ci-row ci-row-wide"><span>Nächste Wahl</span><b>${escapeHtml(profile.nextElection)}</b></div>`;
   html += `</div>`;
 
-  // Allianzen-Karte
-  if (profile?.alliances?.length || live?.memberships?.length) {
-    html += `<div class="dossier-card"><h4>Allianzen & Mitgliedschaften</h4>`;
-    if (profile?.alliances?.length) html += `<div class="ci-row ci-row-wide"><span>Hauptallianzen ${srcBadge('static')}</span><b>${profile.alliances.join(', ')}</b></div>`;
-    if (live?.memberships?.length) html += `<div class="ci-row ci-row-wide"><span>Internat. Org. ${srcBadge('live')}</span><b>${live.memberships.slice(0,12).join(', ')}</b></div>`;
+  // Allianzen & Org-Mitgliedschaften (NEU mit klickbaren Chips)
+  const orgs = (window.getOrgsForCountry?.(iso) || []);
+  if (profile?.alliances?.length || live?.memberships?.length || orgs.length) {
+    html += `<div class="dossier-card"><h4>🏛 Internationale Mitgliedschaften (${orgs.length})</h4>`;
+    if (orgs.length) {
+      html += `<div class="ci-row-wide" style="flex-direction:column;align-items:stretch;padding:0">`;
+      html += `<div class="ci-org-chips">`;
+      orgs.forEach(o => {
+        const k = o.key || o.name;
+        html += `<div class="ci-org-chip type-${o.type||'political'}" data-org="${escapeHtml(k)}" title="${escapeHtml(o.desc||'')}">${escapeHtml(o.name)}</div>`;
+      });
+      html += `</div></div>`;
+    }
+    if (profile?.alliances?.length) html += `<div class="ci-row ci-row-wide" style="margin-top:8px"><span>Statische Allianzen ${srcBadge('static')}</span><b>${profile.alliances.join(', ')}</b></div>`;
+    if (live?.memberships?.length) {
+      const additional = live.memberships.filter(m => !orgs.find(o => (o.name||'').toLowerCase().includes(m.toLowerCase().slice(0,8))));
+      if (additional.length) html += `<div class="ci-row ci-row-wide" style="margin-top:6px"><span>Weitere (Wikidata) ${srcBadge('live')}</span><b style="font-size:11px;color:var(--ink-dim)">${additional.slice(0,12).join(', ')}</b></div>`;
+    }
     html += `</div>`;
   }
 
@@ -2738,6 +2787,14 @@ function renderOverviewTab(body) {
     html += `<div class="ci-source-note" style="margin-top:14px">Wikidata abgerufen: ${date}${live.fromCache?' (Cache)':''}</div>`;
   }
   body.innerHTML = html;
+  // Org-Chips klickbar machen
+  body.querySelectorAll('.ci-org-chip').forEach(chip => {
+    chip.onclick = (e) => {
+      e.stopPropagation();
+      const k = chip.dataset.org;
+      if (window.ORGS?.[k]) window.openOrgProfile(k);
+    };
+  });
 }
 
 function renderDossierGenTab(body) {
@@ -3531,6 +3588,136 @@ document.getElementById('webSearchToggle')?.addEventListener('click', (e) => {
   e.currentTarget.classList.toggle('active', window._webSearchPersistent);
   toast(window._webSearchPersistent ? '🔍 Online-Recherche dauerhaft aktiv' : 'Online-Recherche aus');
 });
+
+/* ════════════════════════════════════════════════════════════════
+   INTERNATIONALE ORGANISATIONEN (Browser + Profil)
+   ════════════════════════════════════════════════════════════════ */
+const ORG_TYPE_LABEL = {
+  political: 'Politisch', military: 'Militär', economic: 'Wirtschaft',
+  judicial: 'Justiz', humanitarian: 'Humanitär', specialized: 'Spezial'
+};
+
+document.getElementById('orgsBtn')?.addEventListener('click', () => {
+  openModal('orgBrowserModal');
+  renderOrgList();
+  setTimeout(() => document.getElementById('orgSearch')?.focus(), 100);
+});
+['orgSearch','orgTypeFilter'].forEach(id => {
+  document.getElementById(id)?.addEventListener('input', renderOrgList);
+  document.getElementById(id)?.addEventListener('change', renderOrgList);
+});
+
+function renderOrgList() {
+  const list = document.getElementById('orgList');
+  const search = document.getElementById('orgSearch').value.trim().toLowerCase();
+  const typeFilter = document.getElementById('orgTypeFilter').value;
+  const orgs = Object.entries(window.ORGS || {});
+  const filtered = orgs.filter(([key, o]) => {
+    if (typeFilter && o.type !== typeFilter) return false;
+    if (search) {
+      const haystack = `${key} ${o.name} ${o.full||''} ${o.desc||''} ${o.role||''}`.toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+  if (!filtered.length) {
+    list.innerHTML = '<div class="conn-empty" style="grid-column:1/-1">Keine Treffer</div>';
+    return;
+  }
+  list.innerHTML = filtered.map(([key, o]) => `
+    <div class="org-card" data-key="${key}">
+      <div class="org-card-head">
+        <div class="org-card-name">${escapeHtml(o.name)}</div>
+        <div class="org-card-type org-type-${o.type}">${ORG_TYPE_LABEL[o.type]||o.type}</div>
+      </div>
+      <div class="org-card-desc">${escapeHtml(o.desc||'')}</div>
+      <div class="org-card-meta">${o.founded||'?'} · ${o.members||'?'} Mitglieder · ${escapeHtml(o.hq||'-')}</div>
+    </div>
+  `).join('');
+  list.querySelectorAll('.org-card').forEach(c => {
+    c.onclick = () => openOrgProfile(c.dataset.key);
+  });
+}
+
+window.openOrgProfile = function(key) {
+  const o = window.ORGS?.[key];
+  if (!o) return toast('Organisation nicht gefunden');
+  document.getElementById('opName').textContent = o.name;
+  document.getElementById('opMeta').textContent = `${o.full || ''} ${o.full && o.founded ? '·' : ''} ${o.founded || ''} ${(o.founded||o.full) && o.hq ? '·' : ''} ${o.hq || ''}`;
+  document.getElementById('opWebsite').onclick = () => { if (o.web && o.web !== '-') window.open(o.web, '_blank'); };
+  document.getElementById('opWebsite').style.display = (o.web && o.web !== '-') ? '' : 'none';
+
+  let html = '';
+  if (o.role) html += `<div class="op-role"><b>Aktuelle Rolle / Funktion in Konflikten:</b><br>${escapeHtml(o.role)}</div>`;
+  if (o.desc) html += `<div class="op-section"><h4>Über</h4><div style="line-height:1.6;color:var(--ink-dim);font-size:12.5px">${escapeHtml(o.desc)}</div></div>`;
+
+  html += `<div class="op-section"><h4>Fakten</h4>
+    <div class="op-row"><span>Vollname</span><b>${escapeHtml(o.full||'-')}</b></div>
+    <div class="op-row"><span>Typ</span><b>${ORG_TYPE_LABEL[o.type]||o.type}</b></div>
+    <div class="op-row"><span>Gegründet</span><b>${o.founded||'-'}</b></div>
+    <div class="op-row"><span>Sitz</span><b>${escapeHtml(o.hq||'-')}</b></div>
+    <div class="op-row"><span>Mitglieder</span><b>${o.members||'-'}</b></div>
+  </div>`;
+
+  if (o.memberIsos?.length) {
+    html += `<div class="op-section"><h4>Mitgliedstaaten (${o.memberIsos.length})</h4><div class="op-members-grid">`;
+    o.memberIsos.forEach(iso => {
+      const cName = window.getCountryProfile?.(iso)?.name || iso;
+      html += `<div class="op-member" data-iso="${iso}"><span class="fl">${flagEmoji(iso)}</span>${escapeHtml(cName)}</div>`;
+    });
+    html += `</div></div>`;
+  } else if (o.members && typeof o.members === 'number' && o.members > 0) {
+    html += `<div class="op-section"><h4>Mitglieder</h4><div style="font-size:11.5px;color:var(--ink-dim)">${o.members} Mitgliedstaaten - Liste nicht im Detail erfasst (zu viele oder zu dynamisch)</div></div>`;
+  }
+
+  document.getElementById('opBody').innerHTML = html;
+  document.getElementById('opBody').querySelectorAll('.op-member').forEach(m => {
+    m.onclick = () => {
+      const iso = m.dataset.iso;
+      const name = window.getCountryProfile?.(iso)?.name || iso;
+      document.getElementById('orgProfileModal').classList.remove('open');
+      window.openCountryDossier(iso, name);
+    };
+  });
+
+  // KI-Analyse Button
+  document.getElementById('opAiAnalysis').onclick = () => generateOrgAnalysis(key, o);
+
+  openModal('orgProfileModal');
+};
+
+async function generateOrgAnalysis(key, o) {
+  const btn = document.getElementById('opAiAnalysis');
+  btn.disabled = true; btn.textContent = '… KI analysiert';
+  const target = document.getElementById('opBody');
+  const resultBox = document.createElement('div');
+  resultBox.className = 'op-section';
+  resultBox.innerHTML = `<h4>🤖 KI-Analyse</h4><div style="color:var(--ink-dim);font-style:italic">Generiere Analyse mit Web-Recherche…</div>`;
+  target.appendChild(resultBox);
+
+  const sys = `Du bist geopolitischer Analyst. Analysiere die Rolle der Organisation in aktuellen Konflikten und Trends. Sei präzise, mit konkreten Beispielen. Strukturiere mit **Fettung**. Deutsch, max 350 Wörter.`;
+  const msg = `Organisation: ${o.name} (${o.full})
+Typ: ${o.type}
+Gegründet: ${o.founded}
+${o.role ? 'Bekannte Rolle: ' + o.role : ''}
+
+Analysiere die aktuelle Bedeutung, Effektivität, Konfliktrolle, interne Spannungen, Reformbedarf.`;
+
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/ai`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({system:sys, messages:[{role:'user', content:msg}], webSearch:true})
+    });
+    const data = await res.json();
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim() || '(keine Antwort)';
+    resultBox.innerHTML = `<h4>🤖 KI-Analyse <span class="src-badge src-ai">AI + Web</span></h4><div style="line-height:1.6;color:var(--ink);white-space:pre-wrap">${escapeHtml(text).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}</div>`;
+    // Auto-Save als Recherche
+    autoSaveAiOutput('ORG_'+key, `Analyse: ${o.name}`, text, 'ai-chat', ['org', o.type]);
+  } catch (e) {
+    resultBox.innerHTML = `<h4>🤖 KI-Analyse</h4><div style="color:var(--conflict)">Fehler: ${escapeHtml(e.message)}</div>`;
+  }
+  btn.disabled = false; btn.textContent = '🤖 KI-Analyse';
+}
 
 /* ════════════════════════════════════════════════════════════════
    RECHERCHE-PROJEKTE
