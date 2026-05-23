@@ -34,8 +34,18 @@ exports.handler = async (event) => {
         : `&format=geojson&timespan=${timespan}&maxpoints=200`;
       const url = 'https://api.gdeltproject.org/api/v2/geo/geo?query=' +
         encodeURIComponent(item.q) + params;
-      const res = await fetch(url, { headers: { 'User-Agent': 'GlobalMonitor/1.0' } });
+      const ctrl = new AbortController();
+      const timeoutId = setTimeout(() => ctrl.abort(), 7000);
+      let res;
+      try {
+        res = await fetch(url, { headers: { 'User-Agent':'GlobalMonitor/1.0' }, signal: ctrl.signal });
+      } finally { clearTimeout(timeoutId); }
       if (!res.ok) throw new Error('GDELT ' + res.status);
+      const ctype = res.headers.get('content-type') || '';
+      if (!ctype.includes('json')) {
+        const t = await res.text();
+        throw new Error('GDELT non-JSON: ' + t.slice(0, 80));
+      }
       const data = await res.json();
       (data.features || []).forEach(f => {
         const coords = f.geometry?.coordinates;

@@ -654,7 +654,7 @@ let conflictStore = [];
 let conflictTimer = null;
 
 async function loadConflicts() {
-  setStatus('Lade Konflikte…', 'load');
+  setStatus(`GDELT abfragen (${timeWindow})…`, 'load');
   ['conflict','battle','protest'].forEach(k => LAYERS[k].group.clearLayers());
   conflictStore = [];
 
@@ -663,12 +663,20 @@ async function loadConflicts() {
       const res = await fetch(`${CONFIG.BACKEND_BASE}/conflicts?timespan=${encodeURIComponent(timeWindow)}`);
       if (!res.ok) throw new Error('HTTP '+res.status);
       const data = await res.json();
+      if (data.errors?.length) console.warn('Conflict-Backend-Errors:', data.errors);
       placeConflicts(data.events || []);
-      setStatus(`${conflictStore.length} Live-Konflikte (${timeWindow})`, 'ok');
+      if (conflictStore.length === 0) {
+        // GDELT lieferte leer - fallback auf Demo damit etwas sichtbar ist
+        const errMsg = data.errors?.length ? `(${data.errors[0].slice(0,40)})` : '(GDELT leer)';
+        placeConflicts(R.demoConflicts);
+        setStatus(`${conflictStore.length} Demo-Events ${errMsg}`, 'err');
+      } else {
+        setStatus(`${conflictStore.length} Live-Konflikte (${timeWindow})`, 'ok');
+      }
       rebuildHeatmap();
     } catch (e) {
       console.error('Conflicts:', e);
-      useDemoConflicts('Backend-Fehler');
+      useDemoConflicts('Backend ' + (e.message||'Fehler'));
     }
   } else {
     useDemoConflicts('Demo-Modus');
@@ -1662,8 +1670,17 @@ function startAis() {
     return;
   }
   if (aisSocket) try { aisSocket.close(); } catch {}
+  // Erstmal Demo zeigen, damit sofort etwas sichtbar ist
+  placeShips(R.demoShips, true);
+  let liveDataReceived = false;
   try {
     aisSocket = new WebSocket('wss://stream.aisstream.io/v0/stream');
+    const connectTimeout = setTimeout(() => {
+      if (!liveDataReceived) {
+        console.warn('AIS: keine Live-Daten innerhalb 15s, bleibe bei Demo');
+        toast('AIS Live verzögert - zeige Demo bis Daten kommen');
+      }
+    }, 15000);
     aisSocket.onopen = () => {
       const b = map.getBounds();
       aisSocket.send(JSON.stringify({
@@ -1671,13 +1688,19 @@ function startAis() {
         BoundingBoxes: [[[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]]],
         FilterMessageTypes: ['PositionReport','ShipStaticData']
       }));
-      setCnt('ships', 'live ws');
-      toast('AIS Live verbunden');
+      setCnt('ships', 'WS open');
     };
     aisSocket.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.MessageType === 'PositionReport') {
+          if (!liveDataReceived) {
+            liveDataReceived = true;
+            // Demo entfernen, ab jetzt nur Live
+            LAYERS.ships.group.clearLayers();
+            LAYERS.shipsMil.group.clearLayers();
+            toast('AIS Live aktiv');
+          }
           const m = msg.Message?.PositionReport;
           if (!m) return;
           const mmsi = m.UserID;
@@ -1903,8 +1926,8 @@ document.querySelectorAll('.modal').forEach(m => {
    MAP-CLICK ROUTING: Pin-Modus → Pin, Measure-Modus → Messen,
    sonst Regions-Analyse
    ════════════════════════════════════════════════════════════════ */
-const originalRegionClickWrapped = true; // marker - regions click bleibt aktiv
 map.on('click', e => {
+  hideCtxMenu();
   if (pinMode) {
     e.originalEvent?.stopPropagation();
     pinMode = false;
@@ -1912,6 +1935,79 @@ map.on('click', e => {
     map._container.style.cursor = '';
     openPinAddModal(e.latlng);
   }
+});
+
+/* ════════════════════════════════════════════════════════════════
+   RECHTSKLICK-KONTEXTMENÜ
+   ════════════════════════════════════════════════════════════════ */
+const ctxMenu = document.getElementById('ctxMenu');
+const ctxCoord = document.getElementById('ctxCoord');
+let ctxLatLng = null;
+
+function showCtxMenu(containerPoint, latlng) {
+  ctxLatLng = latlng;
+  ctxCoord.textContent = `${latlng.lat.toFixed(4)}°, ${latlng.lng.toFixed(4)}°`;
+  const mapEl = map._container;
+  const menuW = 240, menuH = 290;
+  let x = containerPoint.x;
+  let y = containerPoint.y;
+  if (x + menuW > mapEl.clientWidth) x = mapEl.clientWidth - menuW - 10;
+  if (y + menuH > mapEl.clientHeight) y = mapEl.clientHeight - menuH - 10;
+  ctxMenu.style.left = Math.max(0, x) + 'px';
+  ctxMenu.style.top = Math.max(0, y) + 'px';
+  ctxMenu.classList.add('show');
+}
+function hideCtxMenu() { ctxMenu.classList.remove('show'); ctxLatLng = null; }
+
+map.on('contextmenu', e => {
+  e.originalEvent.preventDefault();
+  showCtxMenu(e.containerPoint, e.latlng);
+});
+map.on('movestart zoomstart', hideCtxMenu);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCtxMenu(); });
+
+ctxMenu.querySelectorAll('.ctx-item').forEach(item => {
+  item.onclick = async () => {
+    if (!ctxLatLng) return;
+    const { lat, lng } = ctxLatLng;
+    const act = item.dataset.act;
+    hideCtxMenu();
+    switch (act) {
+      case 'ai':
+        openRegion(lat, lng);
+        break;
+      case 'pin':
+        openPinAddModal({ lat, lng });
+        break;
+      case 'measure':
+        // Mess-Modus starten und den Startpunkt direkt setzen
+        if (!measureActive) document.getElementById('measureBtn').click();
+        measurePoints.push({ lat, lng });
+        measureMarkers.push(L.circleMarker([lat, lng], {radius:4, color:'#21c7d6', fillColor:'#21c7d6', fillOpacity:1, weight:1}).addTo(map));
+        toast('Startpunkt gesetzt - klick weiter, doppelklick beendet');
+        break;
+      case 'copy':
+        try {
+          await navigator.clipboard.writeText(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+          toast('Koordinaten kopiert ✓');
+        } catch { prompt('Kopieren:', `${lat.toFixed(5)}, ${lng.toFixed(5)}`); }
+        break;
+      case 'zoom':
+        map.flyTo([lat, lng], Math.min(map.getZoom() + 3, 14), { duration: 0.7 });
+        break;
+      case 'share':
+        // Erst Map flyto, dann Hash kopieren
+        map.setView([lat, lng], map.getZoom());
+        setTimeout(async () => {
+          const url = location.origin + location.pathname + buildUrlHash();
+          try {
+            await navigator.clipboard.writeText(url);
+            toast('Link zu dieser Stelle kopiert ✓');
+          } catch { prompt('Link:', url); }
+        }, 50);
+        break;
+    }
+  };
 });
 
 /* ════ START ════ */

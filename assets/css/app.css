@@ -287,6 +287,16 @@ select.tb-btn{appearance:none;padding-right:24px;background-image:linear-gradien
 .popup-source a{color:var(--ink-dim);text-decoration:none}
 .popup-source a:hover{color:var(--accent)}
 
+/* ════ CONTEXT MENU (Rechtsklick) ════ */
+.ctx-menu{position:absolute;z-index:2500;background:var(--panel);border:1px solid var(--line-2);
+  border-radius:9px;padding:5px;box-shadow:0 14px 40px rgba(0,0,0,.65);display:none;min-width:230px}
+.ctx-menu.show{display:block}
+.ctx-coord{padding:6px 11px 8px;border-bottom:1px solid var(--line);color:var(--ink-faint);
+  font-size:10px;letter-spacing:.06em;font-family:var(--font-body)}
+.ctx-item{padding:8px 11px;cursor:pointer;border-radius:5px;font-size:12px;color:var(--ink);
+  display:flex;align-items:center;gap:8px}
+.ctx-item:hover{background:var(--panel-3);color:var(--accent)}
+
 /* ════ TOAST ════ */
 .toast{position:absolute;bottom:60px;left:50%;transform:translateX(-50%);z-index:2000;
   background:var(--accent);color:#000;padding:10px 18px;border-radius:8px;font-size:12px;
