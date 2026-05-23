@@ -4598,6 +4598,21 @@ function renderProjOverview(body) {
 
   html += `<div class="proj-section">
     <h4>🤖 KI-Analyse <button id="rerunAnalysis">${p.relatedCountries?.length?'↻ Aktualisieren':'⚡ Starten'}</button></h4>`;
+  // Persistente Fehler-Box bei zuletzt gescheitertem Analyse-Run
+  if (_lastProjAnalysisError) {
+    const e = _lastProjAnalysisError;
+    html += `<div id="projAnalysisErrorBox" style="margin-bottom:10px;padding:11px 13px;background:rgba(255,69,58,0.13);border:1px solid rgba(255,69,58,0.45);border-radius:8px;color:var(--ink);font-size:11.5px;line-height:1.5">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+        <b style="color:#ff453a">⚠ KI-Analyse fehlgeschlagen</b>
+        <button onclick="clearProjectAnalysisError()" style="background:transparent;border:none;color:var(--ink-faint);cursor:pointer;font-size:14px">×</button>
+      </div>
+      <div style="color:var(--ink-dim);white-space:pre-wrap;font-size:11px">${escapeHtml(e.msg)}</div>
+      ${e.bgErr ? `<div style="font-size:10px;color:var(--ink-faint);margin-top:4px">Background-Vorlauf: ${escapeHtml(e.bgErr)}</div>` : ''}
+      ${e.parsed?.apiStatus ? `<div style="font-size:10px;color:var(--ink-faint);margin-top:4px">API-Status: ${e.parsed.apiStatus}${e.parsed.model?' · Modell: '+escapeHtml(e.parsed.model):''}</div>` : ''}
+      ${e.parsed?.timeout ? `<div style="font-size:10.5px;margin-top:6px;color:var(--protest)">→ These ist zu komplex für den 10s-Sync. Tipp: kürzer formulieren oder Netlify-Blobs aktivieren (dann läuft Background mit 15min).</div>` : ''}
+      <div style="font-size:9.5px;color:var(--ink-faint);margin-top:5px">${new Date(e.when).toLocaleTimeString('de-CH')}</div>
+    </div>`;
+  }
   if (p.summary) html += `<div class="proj-thesis" style="border-left-color:var(--accent)">${escapeHtml(p.summary)}</div>`;
   if (p.thesisStrength) html += `<div style="font-size:11px;color:var(--ink-dim);margin-bottom:8px">Plausibilität der These: <b style="color:var(--accent)">${p.thesisStrength}</b></div>`;
   if (p.contextHints?.length) {
@@ -5058,6 +5073,23 @@ Antworte präzise, mit konkreten Akteuren, Daten, Zusammenhängen. Deutsch, max 
   document.getElementById('projChatSend').disabled = false;
 }
 
+// Persistente Fehler-Anzeige für Projekt-Analyse (Toast verschwindet zu schnell)
+let _lastProjAnalysisError = null;
+function showProjectAnalysisError(msg, parsed, bgErr) {
+  _lastProjAnalysisError = {
+    msg, parsed, bgErr: bgErr?.message || null, when: new Date().toISOString()
+  };
+  // Falls Overview-Tab gerade offen: sofort rendern
+  const overviewActive = document.querySelector('.project-tab.active')?.dataset.ptab === 'overview';
+  if (overviewActive) renderProjectTab('overview');
+}
+function clearProjectAnalysisError() {
+  _lastProjAnalysisError = null;
+  const box = document.getElementById('projAnalysisErrorBox');
+  if (box) box.remove();
+}
+window.clearProjectAnalysisError = clearProjectAnalysisError;
+
 // Wandelt das Analyse-JSON in editierbares Markdown um (für Material-Erstellung)
 function formatAnalysisAsMarkdown(data) {
   let md = '';
@@ -5142,17 +5174,23 @@ async function runProjectAnalysis(forceWeb = false) {
       try { parsed = JSON.parse(text); }
       catch { parsed = { error: 'kein JSON in Response: ' + text.slice(0,200) }; }
       if (!res.ok || parsed.error) {
-        toast('KI-Analyse fehlgeschlagen: ' + (parsed.error || `HTTP ${res.status}`));
+        const errMsg = parsed.error || `HTTP ${res.status}`;
+        toast('KI-Analyse fehlgeschlagen: ' + errMsg);
+        // Persistente Fehler-Box im Overview-Tab (Toast verschwindet zu schnell)
+        showProjectAnalysisError(errMsg, parsed, bgErr);
         if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Aktualisieren'; }
         return;
       }
       data = parsed;
     } catch (syncErr) {
       toast('Sync-Fehler: ' + syncErr.message);
+      showProjectAnalysisError(syncErr.message, null, bgErr);
       if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Aktualisieren'; }
       return;
     }
   }
+  // Erfolg → alte Fehler-Box wegräumen
+  clearProjectAnalysisError();
 
   try {
     // Analyse-Daten ins Projekt speichern (für Highlights + Dashboard)

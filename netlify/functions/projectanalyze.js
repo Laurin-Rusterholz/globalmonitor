@@ -66,7 +66,8 @@ JSON liefern.`;
     const fastFallback = ['claude-haiku-4-5', 'claude-3-5-haiku-latest']; // Fast-fail-Chain bei Modell-unbekannt
 
     const modelChain = [primary, ...fastFallback];
-    const perAttemptAbortMs = 8500;
+    // 6.5s Abort: Netlify Free hat 10s incl. Cold-Start (~2s). 6.5 + 2 cold + 1 response-handling = ~9.5s.
+    const perAttemptAbortMs = 6500;
 
     let lastStatus = null;
     let lastErrBody = '';
@@ -76,7 +77,8 @@ JSON liefern.`;
       const modelName = modelChain[i];
       const reqBody = {
         model: modelName,
-        max_tokens: 1200,
+        // 800 statt 1200 → spürbar schneller, reicht für strukturierte Antwort
+        max_tokens: 800,
         system: sys,
         messages: [{ role: 'user', content: userMsg }],
       };
