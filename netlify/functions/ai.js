@@ -32,11 +32,11 @@ exports.handler = async (event) => {
         system,
         messages
       };
-      if (webSearch && i === 0) {
+      if (webSearch && i === 0 && modelName.includes('sonnet')) {
         body.tools = [{
           type: 'web_search_20250305',
           name: 'web_search',
-          max_uses: 5
+          max_uses: 8
         }];
       }
       const res = await fetch('https://api.anthropic.com/v1/messages', {

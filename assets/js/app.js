@@ -860,8 +860,10 @@ async function loadConflicts() {
       if (!res.ok) throw new Error('HTTP '+res.status);
       const data = await res.json();
       if (data.errors?.length) {
-        console.warn('Conflict-Backend-Errors:');
-        data.errors.forEach(e => console.warn(' →', e));
+        // GEO 404 + DOC 429 sind GDELT-bekannte Sporadik - nur loggen wenn KEINE Events geliefert wurden
+        if (!data.events?.length) {
+          console.warn('GDELT-Errors (kein Resultat):', data.errors.slice(0,3).join(' | '));
+        }
       }
       placeConflicts(data.events || []);
       if (conflictStore.length === 0) {
@@ -3157,7 +3159,8 @@ function renderConnectionsTab(body) {
     html += `<div class="conn-list">`;
     allies.slice(0, 30).forEach(([ciso, alliances]) => {
       const cName = window.getCountryProfile?.(ciso)?.name || ciso;
-      html += `<div class="conn-chip conn-ally" onclick="window.openCountryDossier('${ciso}','${cName.replace(/'/g,"\\'")}')"><span class="fl">${flagEmoji(ciso)}</span>${escapeHtml(cName)} <small style="color:var(--ink-faint)">(${alliances.join(', ')})</small></div>`;
+      // data-iso/data-name + Bind via JS unten - vermeidet Escape-Probleme mit "'" in Namen
+      html += `<div class="conn-chip conn-ally cca-open" data-iso="${escapeHtml(ciso)}" data-cname="${escapeHtml(cName)}"><span class="fl">${flagEmoji(ciso)}</span>${escapeHtml(cName)} <small style="color:var(--ink-faint)">(${alliances.map(escapeHtml).join(', ')})</small></div>`;
     });
     html += `</div>`;
   } else html += `<div class="conn-empty">Keine bekannten Allianzen-Partner</div>`;
@@ -3196,6 +3199,14 @@ function renderConnectionsTab(body) {
       const la = +el.dataset.la, lo = +el.dataset.lo;
       document.getElementById('countryDossierModal').classList.remove('open');
       map.flyTo([la, lo], 7, {duration: 0.8});
+    };
+  });
+  // Verbündeten-Chips: Land-Dossier öffnen (via data-attr statt inline onclick)
+  body.querySelectorAll('.cca-open').forEach(el => {
+    el.onclick = () => {
+      const iso = el.dataset.iso;
+      const cname = el.dataset.cname;
+      if (iso) window.openCountryDossier(iso, cname || iso);
     };
   });
 }

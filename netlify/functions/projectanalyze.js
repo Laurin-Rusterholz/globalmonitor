@@ -38,13 +38,13 @@ exports.handler = async (event) => {
 
     const spec = buildSectionSpec(section, { thesis, baseCountries, eventsHint, webSearch });
 
-    const HARD_LIMIT_MS = 24000;
+    const HARD_LIMIT_MS = 24500;
     const startMs = Date.now();
     const remainingMs = () => HARD_LIMIT_MS - (Date.now() - startMs);
 
     const primary = spec.primaryModel;
-    // Sonnet primary → bei Timeout Haiku als Fallback (passt noch in Restbudget)
-    const modelChain = [primary, PRIMARY_HAIKU, ...FALLBACK_MODELS.filter(m => m !== primary && m !== PRIMARY_HAIKU)];
+    // Sonnet 4.6 primary → bei Modell-Fehler Sonnet 4.5, dann Haiku als letzter Fallback
+    const modelChain = [primary, 'claude-sonnet-4-5', PRIMARY_HAIKU, ...FALLBACK_MODELS.filter(m => m !== primary && m !== PRIMARY_HAIKU && m !== 'claude-sonnet-4-5')];
     const firstAttemptAbortMs = spec.firstAttemptMs;
 
     let lastStatus = null;
@@ -90,13 +90,16 @@ exports.handler = async (event) => {
       } catch (e) {
         clearTimeout(tHandle);
         if (e.name === 'AbortError') {
-          if (i < modelChain.length - 1 && remainingMs() > 3500) {
-            console.warn(`Modell ${modelName} timed out nach ${attemptBudget/1000}s, versuche ${modelChain[i+1]}…`);
+          // Sonnet abort → direkt zu Haiku springen (Sonnet 4.5 würde auch langsam sein)
+          const nextHaikuIdx = modelChain.findIndex((m, idx) => idx > i && m.includes('haiku'));
+          if (nextHaikuIdx > i && remainingMs() > 3500) {
+            console.warn(`${modelName} abort nach ${attemptBudget/1000}s → skip zu ${modelChain[nextHaikuIdx]}…`);
             usedFallback = true;
+            i = nextHaikuIdx - 1; // Loop incrementiert i +1
             continue;
           }
           return json({
-            error: `KI-Anfrage zu langsam (Abort nach ${attemptBudget/1000}s, Modell ${modelName}, Section ${section}). Tiefenanalyse mit Websuche nutzen für mehr Zeit.`,
+            error: `KI-Anfrage zu langsam (Abort nach ${attemptBudget/1000}s, Modell ${modelName}, Section ${section}). Bitte 🔬 Tiefenanalyse + Web nutzen (Background, bis 5 min).`,
             timeout: true,
             section,
             model: modelName,
@@ -157,102 +160,88 @@ function buildSectionSpec(section, { thesis, baseCountries, eventsHint, webSearc
   if (section === 'core') {
     return {
       primaryModel: PRIMARY_SONNET,
-      firstAttemptMs: 20000,
-      maxTokens: 2500,
+      firstAttemptMs: 22000,
+      maxTokens: 1800,
       allowWebSearch: true,
-      system: `Du bist ein präziser geopolitischer Senior-Analyst. Liefere AUSSCHLIESSLICH JSON mit den beteiligten Ländern und Akteuren. Sei konkret, nenne Zahlen wo immer möglich (Truppenstärken, Budgets, Handelsvolumen, BIP-Anteile, etc.).
+      system: `Du bist geopolitischer Senior-Analyst. Liefere AUSSCHLIESSLICH JSON mit Ländern und Akteuren - konkret, mit Zahlen.
 
 {
   "countries": [{
     "iso": "DE",
     "role": "primary|secondary|target|beneficiary|loser|bystander",
     "intensity": "high|medium|low",
-    "reason": "2-3 Sätze: warum betroffen, mit konkreten Zahlen/Fakten wenn möglich",
-    "currentActivities": ["3-5 konkrete laufende Aktivitäten dieses Landes zur These (mit Datum/Zeitraum wo möglich)"],
-    "capacities": "1-2 Sätze zu relevanten Kapazitäten (Militär/Wirtschaft/Politik), konkrete Zahlen",
-    "stake": "was das Land gewinnt/verliert (1 Satz)"
+    "reason": "2 Sätze mit Zahlen/Programmen",
+    "currentActivities": ["3-4 laufende Aktivitäten mit Datum/Programm"],
+    "capacities": "1-2 Sätze mit Zahlen (Militär/Wirtschaft/Politik)",
+    "stake": "was gewinnt/verliert"
   }],
   "actors": [{
     "name": "NATO",
     "type": "alliance|state|ngo|company|individual|other",
-    "role": "1-2 Sätze: welche Rolle spielt der Akteur",
-    "stake": "was steht für ihn auf dem Spiel (konkret)",
-    "capabilities": ["3-5 konkrete Fähigkeiten/Ressourcen, mit Zahlen wenn möglich"],
-    "recentActions": ["3-5 jüngste Aktivitäten zur These mit Datum/Zeitraum"]
+    "role": "1-2 Sätze",
+    "stake": "konkret",
+    "capabilities": ["3-4 Fähigkeiten mit Zahlen"],
+    "recentActions": ["3-4 jüngste Aktionen mit Datum"]
   }]
 }
 
-ISO 2-Buchstaben. Länder max 25 (alle direkt+indirekt betroffenen). Akteure max 10. Sei AUSFÜHRLICH und KONKRET - generische Aussagen wie "wichtig für die Region" sind verboten, nenne immer Zahlen, Daten, konkrete Programme/Beschlüsse.`,
-      user: `These: ${thesis}\n${baseHint}${eventsHint}\n\nLiefere die JSON-Analyse mit Ländern und Akteuren. Sei detailliert mit Zahlen und konkreten Aktivitäten.`,
+ISO 2-Buchstaben. Länder max 20, Akteure max 8. KEINE generischen Aussagen - immer Zahlen, Daten, Programme.`,
+      user: `These: ${thesis}\n${baseHint}${eventsHint}\n\nJSON liefern. Konkret mit Zahlen.`,
     };
   }
 
   if (section === 'context') {
     return {
       primaryModel: PRIMARY_SONNET,
-      firstAttemptMs: 20000,
-      maxTokens: 2500,
+      firstAttemptMs: 22000,
+      maxTokens: 1800,
       allowWebSearch: false,
-      system: `Du bist ein präziser geopolitischer Senior-Analyst. Liefere AUSSCHLIESSLICH JSON mit Kontext, historischen Aktivitäten und aktuellen Kapazitäten. Sei konkret mit Zahlen, Daten, Programmen.
+      system: `Du bist geopolitischer Senior-Analyst. Liefere AUSSCHLIESSLICH JSON mit Kontext, Zeitleiste, Kapazitäten - konkret mit Zahlen.
 
 {
-  "summary": "3-5 Sätze: ausführliche Kontextualisierung der These mit Zeitlinie und Kern-Spannungsfeldern",
+  "summary": "3-4 Sätze: Kontext + Kern-Spannungsfelder",
   "thesisStrength": "high|medium|low",
-  "thesisAssessment": "2-3 Sätze: Begründung warum diese Plausibilität, welche Faktoren stützen/schwächen sie",
-  "contextHints": ["8-12 wichtige Kontext-Punkte mit Daten/Zahlen/Beschlüssen/Programmen"],
-  "pastActivities": [{
-    "date": "YYYY-MM oder Zeitraum",
-    "event": "Was ist passiert (konkret, mit Zahlen)",
-    "actor": "Wer war beteiligt",
-    "impact": "Welche Auswirkung auf die These"
-  }],
+  "thesisAssessment": "2 Sätze: Begründung Plausibilität",
+  "contextHints": ["6-10 Kontext-Punkte mit Daten/Zahlen/Programmen"],
+  "pastActivities": [{"date":"YYYY-MM","event":"konkret mit Zahlen","actor":"wer","impact":"Auswirkung"}],
   "currentCapacities": {
-    "military": "ausführlich, mit Zahlen (Truppen, Budgets, Systeme, Programme)",
-    "economic": "ausführlich, mit Zahlen (BIP-Anteile, Handelsvolumen, Investitionen)",
-    "political": "ausführlich (Koalitionen, Beschlüsse, Allianzen)",
-    "infrastructure": "relevante Infrastruktur-Kapazitäten mit Zahlen"
+    "military": "Zahlen (Truppen/Budget/Systeme)",
+    "economic": "Zahlen (BIP/Handel/Investitionen)",
+    "political": "Koalitionen/Beschlüsse/Allianzen",
+    "infrastructure": "mit Zahlen"
   },
-  "keyNumbers": [{
-    "metric": "z.B. EU-Militärausgaben Gesamtbudget 2024",
-    "value": "z.B. 326 Mrd EUR",
-    "context": "1 Satz Einordnung",
-    "year": "2024"
-  }]
+  "keyNumbers": [{"metric":"...","value":"...","year":"...","context":"1 Satz"}]
 }
 
-Liefere mindestens 6-10 pastActivities und 8-15 keyNumbers. Sei AUSFÜHRLICH - das ist eine Senior-Analyst-Briefing, nicht ein Tweet.`,
-      user: `These: ${thesis}\n${baseHint}${eventsHint}\n\nLiefere die JSON-Kontextanalyse mit Zeitleiste, Kapazitäten und konkreten Zahlen.`,
+Mindestens 6 pastActivities und 8 keyNumbers.`,
+      user: `These: ${thesis}\n${baseHint}${eventsHint}\n\nJSON liefern.`,
     };
   }
 
   if (section === 'questions') {
     return {
       primaryModel: PRIMARY_SONNET,
-      firstAttemptMs: 20000,
-      maxTokens: 2000,
+      firstAttemptMs: 22000,
+      maxTokens: 1500,
       allowWebSearch: false,
-      system: `Du bist ein präziser geopolitischer Senior-Analyst. Liefere AUSSCHLIESSLICH JSON mit offenen Fragen, Möglichkeiten/Szenarien und Monitoring-Indikatoren.
+      system: `Du bist geopolitischer Senior-Analyst. Liefere AUSSCHLIESSLICH JSON mit Fragen, Szenarien, Indikatoren.
 
 {
-  "openQuestions": ["8-12 präzise zentrale offene Fragen zur These, jede 1-2 Sätze"],
+  "openQuestions": ["6-10 präzise Fragen, je 1-2 Sätze"],
   "futureScenarios": [{
     "name": "Kurzname",
     "probability": "high|medium|low",
-    "timeline": "kurzfristig (3-6M) | mittelfristig (1-2J) | langfristig (3-5J)",
-    "description": "3-5 Sätze: was passiert in diesem Szenario, mit welchen Akteuren, mit welchen Konsequenzen",
-    "drivers": ["3-5 Faktoren die dieses Szenario wahrscheinlich machen"],
-    "indicators": ["3-5 beobachtbare Frühwarnindikatoren"]
+    "timeline": "kurzfristig 3-6M | mittelfristig 1-2J | langfristig 3-5J",
+    "description": "3-4 Sätze",
+    "drivers": ["3-4 Treiber"],
+    "indicators": ["3-4 Indikatoren"]
   }],
-  "monitoringIndicators": [{
-    "indicator": "Was beobachten",
-    "currentValue": "Aktueller Stand (mit Zahl wenn möglich)",
-    "threshold": "Bei welchem Wert wird es kritisch"
-  }],
-  "criticalGaps": ["Was wir NICHT wissen, aber wissen müssten - 5-8 Punkte"]
+  "monitoringIndicators": [{"indicator":"...","currentValue":"...","threshold":"..."}],
+  "criticalGaps": ["4-6 Wissenslücken"]
 }
 
-Liefere mindestens 4-6 futureScenarios mit unterschiedlicher Wahrscheinlichkeit. Sei AUSFÜHRLICH.`,
-      user: `These: ${thesis}\n${baseHint}${eventsHint}\n\nLiefere die JSON-Analyse mit Fragen, Szenarien und Indikatoren. Sei detailliert.`,
+Mindestens 3-5 futureScenarios.`,
+      user: `These: ${thesis}\n${baseHint}${eventsHint}\n\nJSON liefern.`,
     };
   }
 
