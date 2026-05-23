@@ -3828,46 +3828,59 @@ function ruleBasedSuggest(text) {
   return [...found];
 }
 
-async function suggestProjectCountries() {
+// ⚡ Vorschlag: NUR Regel-basiert, instant, KEINE KI
+function ruleOnlySuggest() {
   const name = document.getElementById('newProjName').value.trim();
   const thesis = document.getElementById('newProjThesis').value.trim();
   const combined = `${name}. ${thesis}`.trim();
-  if (combined.length < 15) return toast('Mehr Titel/These eingeben');
+  if (combined.length < 10) return toast('Mehr Titel/These eingeben');
 
-  // SOFORT: Regel-basierter Vorschlag (kein API-Call)
   const ruleHits = ruleBasedSuggest(combined);
   const preview = document.getElementById('suggestPreview');
   preview.style.display = 'block';
 
-  if (ruleHits.length) {
-    const previewHtml = ruleHits.slice(0,20).map(iso => {
-      const cName = window.getCountryProfile?.(iso)?.name || iso;
-      return `<span>${flagEmoji(iso)} ${escapeHtml(cName)}</span>`;
-    }).join(' · ');
-    preview.innerHTML = `<b style="color:var(--choke)">⚡ Sofort-Vorschlag (Regel-basiert, ${ruleHits.length} Länder):</b><br>${previewHtml}<br><i style="color:var(--ink-faint);font-size:10px">KI verfeinert in Hintergrund…</i>`;
-    document.getElementById('newProjCountries').value = ruleHits.join(', ');
-  } else {
-    preview.innerHTML = '<i style="color:var(--ink-faint)">Keine Stichwort-Treffer - KI analysiert…</i>';
+  if (!ruleHits.length) {
+    preview.innerHTML = `<i style="color:var(--ink-faint)">Keine Stichwort-Treffer in den Regeln. Drücke 🤖 KI für Tiefenanalyse, oder gib Länder manuell ein.</i>`;
+    return;
   }
+  const previewHtml = ruleHits.slice(0,30).map(iso => {
+    const cName = window.getCountryProfile?.(iso)?.name || iso;
+    return `<span>${flagEmoji(iso)} ${escapeHtml(cName)}</span>`;
+  }).join(' · ');
+  preview.innerHTML = `<b style="color:var(--choke)">⚡ Regel-basiert (${ruleHits.length} Länder):</b><br>${previewHtml}${ruleHits.length>30?` <i>+${ruleHits.length-30} weitere</i>`:''}<br><small style="color:var(--ink-faint);font-size:10px">Drücke 🤖 KI für Tiefenanalyse mit Rollen & Begründung.</small>`;
+  document.getElementById('newProjCountries').value = ruleHits.join(', ');
+}
 
-  // KI im Background-Job - bis 120s erlaubt (Netlify Background Functions)
-  const btn = document.getElementById('suggestCountriesBtn');
+// 🤖 KI: explizite Background-Analyse (kann lange dauern)
+async function aiOnlySuggest() {
+  const name = document.getElementById('newProjName').value.trim();
+  const thesis = document.getElementById('newProjThesis').value.trim();
+  const combined = `${name}. ${thesis}`.trim();
+  if (combined.length < 10) return toast('Mehr Titel/These eingeben');
+
+  const preview = document.getElementById('suggestPreview');
+  preview.style.display = 'block';
+  const existingHtml = preview.innerHTML;
+
+  // Pre-existing countries als Basis nutzen
+  const existingField = document.getElementById('newProjCountries').value.trim();
+  const baseCountries = existingField ? existingField.split(/[,;\s]+/).filter(Boolean).map(c=>c.toUpperCase()) : ruleBasedSuggest(combined);
+
+  const btn = document.getElementById('suggestAiBtn');
   const origBtn = btn.textContent;
-  btn.disabled = true; btn.textContent = '… KI denkt nach';
+  btn.disabled = true; btn.textContent = '… KI 0s';
 
   try {
+    preview.innerHTML = `<i style="color:var(--protest)">🤖 KI startet (Background, max 120s)…</i>`;
     const data = await window.runBackgroundJob('projectanalyze', {
-      thesis: combined, baseCountries: ruleHits, webSearch: false
+      thesis: combined, baseCountries, webSearch: false
     }, {
       maxWaitSec: 120,
       pollIntervalMs: 2500,
-      onProgress: (i, max) => {
+      onProgress: (i) => {
         const sec = Math.round(i * 2.5);
-        btn.textContent = `… KI denkt (${sec}s)`;
-        // Sanfte Erinnerung im Preview alle ~10s
-        if (i > 0 && i % 4 === 0 && ruleHits.length) {
-          preview.innerHTML = preview.innerHTML.replace(/<i[^>]*>KI verfeinert[^<]*<\/i>/, `<i style="color:var(--ink-faint);font-size:10px">KI arbeitet noch (${sec}s)…</i>`);
-        }
+        btn.textContent = `… KI ${sec}s`;
+        preview.innerHTML = `<i style="color:var(--protest)">🤖 KI arbeitet (${sec}s)…</i>`;
       }
     });
 
@@ -3876,41 +3889,26 @@ async function suggestProjectCountries() {
       const isos = countries.map(c => c.iso);
       document.getElementById('newProjCountries').value = isos.join(', ');
       preview.innerHTML = `<b style="color:var(--protest)">🤖 KI-Vorschlag (${countries.length} Länder, ${data.model||'?'}):</b><br>` +
-        countries.slice(0,15).map(c => {
+        countries.slice(0,18).map(c => {
           const cName = window.getCountryProfile?.(c.iso)?.name || c.iso;
           return `<span title="${escapeHtml(c.reason||'')}">${flagEmoji(c.iso)} ${escapeHtml(cName)} <small style="opacity:.7">(${c.role||'?'})</small></span>`;
         }).join(' · ') +
-        (countries.length > 15 ? ` <i>+${countries.length-15} weitere</i>` : '');
+        (countries.length > 18 ? ` <i>+${countries.length-18} weitere</i>` : '') +
+        (data.summary ? `<br><br><b style="color:var(--accent)">KI-Zusammenfassung:</b><br>${escapeHtml(data.summary)}` : '');
     } else {
-      preview.innerHTML += `<br><small style="color:var(--ink-faint)">KI hat keine zusätzlichen Länder gefunden. Regel-Vorschläge bleiben.</small>`;
+      preview.innerHTML = existingHtml + `<br><small style="color:var(--ink-faint)">KI hat keine Länder geliefert.</small>`;
     }
   } catch (e) {
-    console.error('Background-Job-Fehler:', e);
-    if (ruleHits.length) {
-      preview.innerHTML += `<br><small style="color:var(--ink-faint);font-size:10px">⚠ KI: ${escapeHtml(e.message)} - Regel-Vorschläge bleiben.</small>`;
-    } else {
-      preview.innerHTML = `<span style="color:var(--conflict)">Fehler: ${escapeHtml(e.message)}</span>`;
-    }
+    console.error('KI-Job-Fehler:', e);
+    preview.innerHTML = existingHtml + `<br><small style="color:var(--conflict);font-size:10px">⚠ KI: ${escapeHtml(e.message)}</small>`;
   }
   btn.disabled = false; btn.textContent = origBtn;
 }
 
-document.getElementById('suggestCountriesBtn')?.addEventListener('click', suggestProjectCountries);
+document.getElementById('suggestCountriesBtn')?.addEventListener('click', ruleOnlySuggest);
+document.getElementById('suggestAiBtn')?.addEventListener('click', aiOnlySuggest);
 
-// Auto-Suggest mit Debounce: nach 2s Idle in der These
-let _suggestDebounce = null;
-document.getElementById('newProjThesis')?.addEventListener('input', () => {
-  clearTimeout(_suggestDebounce);
-  const thesis = document.getElementById('newProjThesis').value.trim();
-  const countriesField = document.getElementById('newProjCountries').value.trim();
-  // Nur auto-suggest wenn These lang genug UND Länderfeld leer
-  if (thesis.length < 60 || countriesField.length > 0) return;
-  _suggestDebounce = setTimeout(() => {
-    const preview = document.getElementById('suggestPreview');
-    preview.style.display = 'block';
-    preview.innerHTML = '<i style="color:var(--ink-faint)">Drücke 🤖 Vorschlagen für KI-Empfehlung der relevanten Länder.</i>';
-  }, 1500);
-});
+// Kein Auto-Trigger mehr beim Tippen - User entscheidet via Buttons
 
 document.getElementById('newProjCreate')?.addEventListener('click', async () => {
   const name = document.getElementById('newProjName').value.trim();
