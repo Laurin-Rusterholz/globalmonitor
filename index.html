@@ -3,153 +3,33 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Konflikt-Atlas · Geopolitisches Lagebild</title>
+<title>Global Monitor · Geopolitisches Lagebild</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<style>
-  :root{
-    --bg:#070a0f; --panel:#0f141d; --panel-2:#161d28; --panel-3:#1d2633;
-    --line:#28323f; --line-2:#323e4e;
-    --ink:#e8edf4; --ink-dim:#7e8b9d; --ink-faint:#566375;
-    --conflict:#ff4d3d; --battle:#ff7847; --protest:#ffc83d;
-    --pipeline-oil:#c77dff; --pipeline-gas:#7a5cff;
-    --route:#21c7d6; --choke:#3ecf8e; --nuclear:#ffe14d;
-    --port:#5b9bff; --sanction:#ff5da2; --plane:#9fb3c8;
-    --font-display:"Georgia",ui-serif,serif;
-    --font-body:ui-monospace,"SF Mono","Cascadia Mono","Roboto Mono",monospace;
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  html,body{height:100%}
-  body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:13px;overflow:hidden}
-  #app{display:grid;grid-template-columns:320px 1fr;height:100vh}
-
-  #sidebar{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
-  .brand{padding:16px 18px 13px;border-bottom:1px solid var(--line);position:relative;overflow:hidden}
-  .brand::after{content:"";position:absolute;top:-40%;right:-10%;width:120px;height:160px;
-    background:radial-gradient(circle,rgba(255,77,61,.18),transparent 70%);pointer-events:none}
-  .brand h1{font-family:var(--font-display);font-weight:600;font-size:21px;line-height:1;display:flex;align-items:center;gap:8px}
-  .brand h1 .live{font-family:var(--font-body);font-size:8.5px;letter-spacing:.15em;background:var(--conflict);
-    color:#fff;padding:2px 6px;border-radius:4px;animation:livePulse 2s infinite}
-  @keyframes livePulse{50%{opacity:.55}}
-  .brand .sub{color:var(--ink-dim);font-size:10px;margin-top:6px;text-transform:uppercase;letter-spacing:.2em}
-  .scroll{overflow-y:auto;flex:1;padding:12px 16px 90px}
-  .scroll::-webkit-scrollbar{width:7px}.scroll::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:4px}
-
-  .section-label{font-size:9.5px;text-transform:uppercase;letter-spacing:.2em;color:var(--ink-faint);
-    margin:16px 0 8px;display:flex;align-items:center;gap:8px}
-  .section-label::after{content:"";flex:1;height:1px;background:var(--line)}
-  .section-label:first-child{margin-top:2px}
-
-  .layer-toggle{display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--line);
-    border-radius:7px;margin-bottom:6px;cursor:pointer;background:var(--panel-2);
-    transition:border-color .15s,background .15s,opacity .15s;user-select:none}
-  .layer-toggle:hover{border-color:var(--line-2);background:var(--panel-3)}
-  .layer-toggle.off{opacity:.4}
-  .swatch{width:10px;height:10px;border-radius:3px;flex:0 0 auto;box-shadow:0 0 8px currentColor}
-  .swatch.line{height:3px;width:14px;border-radius:2px}
-  .layer-toggle .name{flex:1;font-size:12px}
-  .layer-toggle .cnt{color:var(--ink-faint);font-size:10.5px;min-width:22px;text-align:right}
-
-  .basemap-row{display:flex;gap:6px;margin-bottom:4px}
-  .basemap-btn{flex:1;text-align:center;padding:7px 0;border:1px solid var(--line);border-radius:7px;
-    background:var(--panel-2);cursor:pointer;font-size:10.5px;color:var(--ink-dim)}
-  .basemap-btn.active{border-color:var(--route);color:var(--ink);background:var(--panel-3)}
-
-  .hint{color:var(--ink-dim);font-size:10.5px;line-height:1.55;padding:9px 11px;
-    border:1px dashed var(--line-2);border-radius:7px;margin-top:4px}
-  .hint b{color:var(--protest)}
-
-  #map{height:100vh;width:100%;background:#05070a;z-index:1}
-  .leaflet-container{background:#05070a;font-family:var(--font-body)}
-  .leaflet-popup-content-wrapper{background:var(--panel-2);color:var(--ink);border:1px solid var(--line-2);border-radius:9px}
-  .leaflet-popup-tip{background:var(--panel-2);border:1px solid var(--line-2)}
-  .leaflet-popup-content{margin:11px 13px;font-size:11.5px;line-height:1.5}
-  .leaflet-popup-content b{font-family:var(--font-display);font-size:13.5px}
-  .leaflet-popup-content .tag{display:inline-block;font-size:9px;letter-spacing:.08em;text-transform:uppercase;
-    padding:2px 6px;border-radius:4px;margin-top:6px}
-  .leaflet-bar a{background:var(--panel-2);color:var(--ink);border-color:var(--line-2)}
-  .leaflet-bar a:hover{background:var(--panel-3)}
-  .plane-icon{font-size:15px;line-height:1;filter:drop-shadow(0 0 3px rgba(159,179,200,.6))}
-
-  #topbar{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:1000;display:flex;gap:8px;
-    align-items:center;background:rgba(15,20,29,.93);backdrop-filter:blur(10px);border:1px solid var(--line-2);
-    border-radius:30px;padding:6px 8px 6px 15px;box-shadow:0 10px 36px rgba(0,0,0,.5)}
-  #topbar .status{font-size:10.5px;color:var(--ink-dim);display:flex;align-items:center;gap:7px;white-space:nowrap}
-  .dot{width:7px;height:7px;border-radius:50%;background:var(--choke)}
-  .dot.load{background:var(--protest);animation:blink 1s infinite}.dot.err{background:var(--conflict)}
-  @keyframes blink{50%{opacity:.3}}
-  .tb-btn{background:var(--panel-2);border:1px solid var(--line-2);color:var(--ink);border-radius:20px;
-    padding:6px 13px;cursor:pointer;font-family:inherit;font-size:10.5px}
-  .tb-btn:hover{border-color:var(--route)}
-
-  #clock{position:absolute;bottom:14px;left:14px;z-index:1000;background:rgba(15,20,29,.9);
-    border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:10.5px;color:var(--ink-dim)}
-  #clock b{color:var(--ink);font-family:var(--font-display)}
-
-  #ai{position:absolute;top:0;right:0;height:100vh;width:430px;background:var(--panel);
-    border-left:1px solid var(--line-2);z-index:1200;transform:translateX(100%);
-    transition:transform .28s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;
-    box-shadow:-18px 0 48px rgba(0,0,0,.55)}
-  #ai.open{transform:translateX(0)}
-  .ai-head{padding:15px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:flex-start;gap:10px;position:relative;overflow:hidden}
-  .ai-head::after{content:"";position:absolute;top:-50%;left:-10%;width:150px;height:120px;background:radial-gradient(circle,rgba(33,199,214,.14),transparent 70%)}
-  .ai-head .region{font-family:var(--font-display);font-size:18px;line-height:1.2}
-  .ai-head .coords{color:var(--ink-faint);font-size:10px;margin-top:4px}
-  .ai-head .ctx{color:var(--route);font-size:9.5px;margin-top:5px;letter-spacing:.04em}
-  .closeBtn{background:none;border:none;color:var(--ink-dim);font-size:24px;cursor:pointer;line-height:1;z-index:2}
-  .closeBtn:hover{color:var(--ink)}
-  .ai-body{flex:1;overflow-y:auto;padding:16px 18px}
-  .ai-body::-webkit-scrollbar{width:7px}.ai-body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:4px}
-  .msg{margin-bottom:15px;line-height:1.62;font-size:12.5px}
-  .msg.user{color:var(--protest)}.msg.user::before{content:"› ";color:var(--ink-faint)}
-  .msg.ai{white-space:pre-wrap}.msg.ai b{font-family:var(--font-display);color:#fff}
-  .thinking{color:var(--ink-dim);font-style:italic}
-  .empty-state{color:var(--ink-faint);font-size:11.5px;line-height:1.6;text-align:center;margin-top:30px;padding:0 10px}
-  .ai-foot{padding:13px 18px;border-top:1px solid var(--line)}
-  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
-  .chip{background:var(--panel-2);border:1px solid var(--line-2);color:var(--ink-dim);border-radius:14px;
-    padding:5px 11px;font-size:10px;cursor:pointer}
-  .chip:hover{border-color:var(--conflict);color:var(--ink)}
-  .ask-row{display:flex;gap:8px}
-  #askInput{flex:1;background:var(--panel-2);border:1px solid var(--line-2);color:var(--ink);border-radius:8px;
-    padding:10px 12px;font-family:inherit;font-size:12px;resize:none;max-height:120px}
-  #askInput:focus{outline:none;border-color:var(--conflict)}
-  #sendBtn{background:var(--conflict);border:none;color:#fff;border-radius:8px;padding:0 16px;cursor:pointer;font-size:14px}
-  #sendBtn:disabled{opacity:.4;cursor:not-allowed}
-  .backend-note{font-size:9.5px;color:var(--ink-faint);margin-top:8px;line-height:1.45}
-</style>
+<link rel="stylesheet" href="assets/css/app.css" />
 </head>
 <body>
 <div id="app">
   <aside id="sidebar">
     <div class="brand">
-      <h1>Konflikt-Atlas <span class="live">LIVE</span></h1>
+      <h1>Global Monitor <span class="live">LIVE</span></h1>
       <div class="sub">Geopolitisches Lagebild</div>
     </div>
+    <div class="search-row">
+      <input id="searchInput" type="text" placeholder="Suche: Hafen, Basis, Pipeline, AKW…" autocomplete="off">
+      <div class="search-results empty" id="searchResults"></div>
+    </div>
     <div class="scroll">
-      <div class="section-label">Kartenansicht</div>
       <div class="basemap-row">
         <div class="basemap-btn active" data-base="dark">Dunkel</div>
         <div class="basemap-btn" data-base="sat">Satellit</div>
-        <div class="basemap-btn" data-base="terrain">Relief</div>
+        <div class="basemap-btn" data-base="terrain">Vektor</div>
+        <div class="basemap-btn" data-base="topo">Topo</div>
       </div>
-
-      <div class="section-label">Ereignisse</div>
-      <div id="eventList"></div>
-
-      <div class="section-label">Energie & Infrastruktur</div>
-      <div id="energyList"></div>
-
-      <div class="section-label">See & Handel</div>
-      <div id="maritimeList"></div>
-
-      <div class="section-label">Politik</div>
-      <div id="politicsList"></div>
-
-      <div class="section-label">Luftraum</div>
-      <div id="airList"></div>
-
-      <div class="section-label">KI-Analyse</div>
-      <div class="hint">Klick auf eine beliebige Stelle der Karte. Die KI bekommt automatisch die <b>sichtbaren Ereignisse, Pipelines, Häfen & AKW</b> der Umgebung als Kontext und beantwortet deine Fragen.</div>
+      <div id="categories"></div>
+      <div class="hint">
+        Klick auf eine beliebige Stelle der Karte → die <b>KI bekommt automatisch den lokalen Kontext</b>
+        (Konflikte, Pipelines, Basen, Häfen, Rohstoffe, BRI, Wirtschaftsdaten) und beantwortet deine Fragen.
+      </div>
     </div>
   </aside>
 
@@ -158,8 +38,11 @@
       <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">Initialisiere…</span></div>
       <button class="tb-btn" id="refreshBtn">↻ Aktualisieren</button>
       <button class="tb-btn" id="planeBtn">✈ Flüge</button>
+      <button class="tb-btn" id="shipBtn">⚓ Schiffe</button>
+      <button class="tb-btn" id="legendBtn">☰ Legende</button>
     </div>
     <div id="clock"><b id="utcTime">--:--</b> UTC · <span id="evtTotal">0</span> Ereignisse</div>
+    <div id="legend"></div>
     <div id="map"></div>
   </div>
 </div>
@@ -173,16 +56,22 @@
     </div>
     <button class="closeBtn" id="closeAi">×</button>
   </div>
+  <div class="country-info" id="countryInfo"></div>
   <div class="ai-body" id="aiBody">
-    <div class="empty-state" id="emptyState">Klicke auf die Karte, um eine Region zu analysieren.<br><br>Die KI erhält die lokale Lage als Kontext.</div>
+    <div class="empty-state" id="emptyState">
+      Klicke auf die Karte oder ein Objekt, um eine Region zu analysieren.<br><br>
+      Die KI erhält die lokale Lage (Konflikte, Infrastruktur, Wirtschaft) automatisch als Kontext.
+    </div>
   </div>
   <div class="ai-foot">
     <div class="chips" id="chips">
       <span class="chip" data-q="Fasse die aktuelle geopolitische und Sicherheitslage dieser Region zusammen.">Lage</span>
-      <span class="chip" data-q="Welche Pipelines, Handelsrouten, Häfen und strategischen Chokepoints sind hier relevant und warum?">Infrastruktur</span>
-      <span class="chip" data-q="Welche Staaten, Allianzen und nichtstaatlichen Akteure haben hier Interessen?">Akteure</span>
+      <span class="chip" data-q="Welche Pipelines, Handelsrouten, Häfen, Internet-Seekabel und strategischen Chokepoints sind hier relevant und warum?">Infrastruktur</span>
+      <span class="chip" data-q="Welche Staaten, Allianzen, Militärbasen und nichtstaatlichen Akteure sind hier präsent? Welche Interessen verfolgen sie?">Akteure</span>
+      <span class="chip" data-q="Welche Rohstoffe und Energiequellen prägen die Region, und wer kontrolliert sie?">Rohstoffe</span>
+      <span class="chip" data-q="Welche BRI-Projekte oder Investitionen externer Mächte beeinflussen die Region?">BRI/Investitionen</span>
       <span class="chip" data-q="Welche Sanktionen betreffen diese Region und welche Wirkung haben sie?">Sanktionen</span>
-      <span class="chip" data-q="Welche Eskalationsszenarien und Risiken sind für die kommenden Monate denkbar?">Risiken</span>
+      <span class="chip" data-q="Welche Eskalationsszenarien und Risiken sind für die kommenden 6–12 Monate denkbar?">Risiken</span>
     </div>
     <div class="ask-row">
       <textarea id="askInput" rows="1" placeholder="Frage zur Region…"></textarea>
@@ -193,358 +82,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-/* ════════════════════════════════════════════════════════════════
-   KONFLIKT-ATLAS  ·  Single-File Grundgerüst (ausführliche Version)
-   ────────────────────────────────────────────────────────────────
-   WICHTIG ZUR ARCHITEKTUR:
-   • GDELT & Anthropic-API senden KEINE CORS-Header bzw. dürfen
-     nicht direkt aus dem Browser aufgerufen werden.
-   • Aus einer file:// Datei funktioniert KEIN externer API-Call.
-   • Diese Datei läuft daher mit umfangreichen EINGEBETTETEN Daten.
-   • Für ECHTE Live-Daten: über Netlify mit Functions betreiben,
-     unten USE_BACKEND = true setzen (Function-Code separat).
-   ════════════════════════════════════════════════════════════════ */
-
-const CONFIG = {
-  USE_BACKEND: true,
-  BACKEND_BASE: '/.netlify/functions'
-};
-
-const map = L.map('map',{zoomControl:true,worldCopyJump:true,minZoom:2}).setView([28,25],3);
-const bases = {
-  dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    {attribution:'© OSM, © CARTO',subdomains:'abcd',maxZoom:19}),
-  sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    {attribution:'© Esri, Maxar, Earthstar',maxZoom:19}),
-  terrain: L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-    {attribution:'© OSM, © CARTO',subdomains:'abcd',maxZoom:19})
-};
-let activeBase = bases.dark.addTo(map);
-document.querySelectorAll('.basemap-btn').forEach(b=>{
-  b.onclick=()=>{
-    document.querySelectorAll('.basemap-btn').forEach(x=>x.classList.remove('active'));
-    b.classList.add('active');
-    map.removeLayer(activeBase);
-    activeBase = bases[b.dataset.base].addTo(map);
-    activeBase.bringToBack && activeBase.bringToBack();
-  };
-});
-
-function LG(name,color,on=true,line=false){return {name,color,on,line,group:L.layerGroup()};}
-const L_ = {
-  conflict: LG('Bewaffnete Konflikte','#ff4d3d'),
-  battle:   LG('Gefechte / Offensiven','#ff7847'),
-  protest:  LG('Proteste & Unruhen','#ffc83d'),
-  pipeOil:  LG('Ölpipelines','#c77dff',true,true),
-  pipeGas:  LG('Gaspipelines','#7a5cff',true,true),
-  nuclear:  LG('Atomkraftwerke','#ffe14d'),
-  routes:   LG('Handelsrouten','#21c7d6',true,true),
-  choke:    LG('Chokepoints','#3ecf8e'),
-  ports:    LG('Strategische Häfen','#5b9bff'),
-  sanctions:LG('Sanktionierte Staaten','#ff5da2'),
-  planes:   LG('Flugzeuge (Live)','#9fb3c8',false),
-};
-Object.values(L_).forEach(l=>{ if(l.on) l.group.addTo(map); });
-
-function buildToggles(keys,containerId){
-  const c=document.getElementById(containerId);c.innerHTML='';
-  keys.forEach(key=>{
-    const l=L_[key];
-    const el=document.createElement('div');
-    el.className='layer-toggle'+(l.on?'':' off');
-    el.innerHTML=`<span class="swatch ${l.line?'line':''}" style="background:${l.color};color:${l.color}"></span>
-      <span class="name">${l.name}</span><span class="cnt" id="cnt-${key}"></span>`;
-    el.onclick=()=>{l.on=!l.on;el.classList.toggle('off',!l.on);
-      if(l.on)map.addLayer(l.group);else map.removeLayer(l.group);};
-    c.appendChild(el);
-  });
-}
-buildToggles(['conflict','battle','protest'],'eventList');
-buildToggles(['pipeOil','pipeGas','nuclear'],'energyList');
-buildToggles(['routes','choke','ports'],'maritimeList');
-buildToggles(['sanctions'],'politicsList');
-buildToggles(['planes'],'airList');
-
-/* ════════ EINGEBETTETE DATEN ════════ */
-const PIPELINES = [
-  {n:'Nord Stream 1 & 2', t:'gas', c:[[60.3,28.0],[59.5,22.0],[56.0,18.0],[54.9,15.0],[54.1,13.6]]},
-  {n:'Druschba (Freundschaft)', t:'oil', c:[[52.5,52.0],[52.8,42.0],[52.4,32.0],[51.0,24.0],[49.6,19.5],[49.0,17.1]]},
-  {n:'TurkStream', t:'gas', c:[[45.1,37.5],[43.3,33.0],[41.9,28.2]]},
-  {n:'BTC (Baku–Tbilisi–Ceyhan)', t:'oil', c:[[40.4,49.9],[41.7,44.8],[40.0,40.0],[37.0,35.8]]},
-  {n:'Power of Siberia', t:'gas', c:[[62.0,129.7],[56.0,124.0],[53.0,120.0],[50.3,127.5],[48.5,135.0]]},
-  {n:'Yamal–Europa', t:'gas', c:[[66.5,66.0],[60.0,55.0],[55.7,37.6],[52.2,21.0],[52.5,13.4]]},
-  {n:'TAPI (geplant)', t:'gas', c:[[37.9,58.4],[34.5,62.2],[31.6,65.7],[29.4,71.5],[28.6,77.2]]},
-  {n:'TANAP (Trans-Anatolien)', t:'gas', c:[[39.7,44.0],[39.9,38.0],[40.0,32.8],[40.4,29.0]]},
-  {n:'West-Afrika (NNPC)', t:'oil', c:[[6.5,3.4],[5.5,0.2],[5.6,-0.2],[6.3,-2.3]]},
-  {n:'Keystone', t:'oil', c:[[53.5,-113.5],[49.0,-104.0],[44.0,-97.0],[36.0,-95.5],[29.7,-95.4]]},
-];
-const ROUTES = [
-  {n:'Asien–Europa (Suez)', c:[[1.26,103.8],[6.9,79.8],[12.5,51.0],[12.8,43.4],[20.0,38.0],[27.2,33.9],[30.0,32.5],[31.5,32.3],[34.0,24.0],[36.0,12.0],[37.0,3.0],[36.1,-5.3]]},
-  {n:'Asien–Europa (Kap)', c:[[1.26,103.8],[-6.0,80.0],[-20.0,55.0],[-34.4,18.5],[-20.0,5.0],[0.0,0.0],[14.7,-17.4],[27.0,-14.0],[36.1,-5.3]]},
-  {n:'Transpazifik', c:[[35.0,139.8],[35.0,170.0],[37.0,-150.0],[37.8,-122.4]]},
-  {n:'Transatlantik', c:[[40.7,-74.0],[45.0,-50.0],[49.0,-20.0],[51.0,1.0]]},
-  {n:'Golf–Asien (Öl)', c:[[26.6,56.3],[24.0,60.0],[18.0,68.0],[10.0,77.0],[6.9,79.8],[2.5,101.0],[22.3,114.2]]},
-];
-const CHOKES = [
-  {n:'Strasse von Hormus', la:26.6, lo:56.3, d:'~20–30% des seetransportierten Öls weltweit'},
-  {n:'Suezkanal', la:30.4, lo:32.35, d:'~12% des Welthandels; Asien–Europa-Nadelöhr'},
-  {n:'Strasse von Malakka', la:2.5, lo:101.0, d:'Energie-Lebensader Ostasiens'},
-  {n:'Bab al-Mandab', la:12.6, lo:43.4, d:'Tor zum Roten Meer / Suez'},
-  {n:'Bosporus & Dardanellen', la:41.1, lo:29.05, d:'Schwarzmeer-Zugang, Getreide & Öl'},
-  {n:'Panamakanal', la:9.1, lo:-79.7, d:'Atlantik–Pazifik, Dürre-anfällig'},
-  {n:'Strasse von Gibraltar', la:35.95, lo:-5.6, d:'Mittelmeer–Atlantik'},
-  {n:'Dänische Meerengen', la:55.7, lo:12.7, d:'Ostsee-Ausgang'},
-  {n:'Strasse von Taiwan', la:24.5, lo:119.5, d:'Hochspannungs-Seeweg, ~20% Welthandel'},
-];
-const PORTS = [
-  {n:'Rotterdam', la:51.95, lo:4.14, d:'Grösster Hafen Europas'},
-  {n:'Shanghai', la:30.6, lo:122.1, d:'Grösster Containerhafen der Welt'},
-  {n:'Singapur', la:1.26, lo:103.8, d:'Zentraler Umschlagplatz Südostasien'},
-  {n:'Dschibuti', la:11.6, lo:43.15, d:'Militärbasen mehrerer Mächte'},
-  {n:'Gwadar', la:25.1, lo:62.3, d:'China-Pakistan-Korridor (CPEC)'},
-  {n:'Piräus', la:37.94, lo:23.64, d:'Chinesische Beteiligung (COSCO)'},
-  {n:'Sewastopol', la:44.6, lo:33.5, d:'Schwarzmeerflotte Russlands'},
-  {n:'Bandar Abbas', la:27.15, lo:56.2, d:'Iranischer Marinestützpunkt'},
-  {n:'Dschidda', la:21.5, lo:39.17, d:'Rotes Meer, saudischer Haupthafen'},
-  {n:'LA/Long Beach', la:33.74, lo:-118.2, d:'Wichtigstes US-Pazifiktor'},
-];
-const NUCLEAR = [
-  {n:'Saporischschja', la:47.5, lo:34.6, d:'Grösstes AKW Europas – im Kriegsgebiet'},
-  {n:'Bushehr', la:28.83, lo:50.89, d:'Einziges AKW Irans'},
-  {n:'Fukushima Daiichi', la:37.42, lo:141.03, d:'Stillgelegt nach Katastrophe 2011'},
-  {n:'Tschernobyl', la:51.39, lo:30.1, d:'Sperrzone'},
-  {n:'Kaschiwasaki-Kariwa', la:37.43, lo:138.6, d:'Eines der grössten AKW weltweit'},
-  {n:'Kudankulam', la:8.17, lo:77.7, d:'Russisch gebaut, Südindien'},
-  {n:'Barakah', la:23.97, lo:52.2, d:'Erstes AKW der arabischen Welt'},
-  {n:'Kori-Cluster', la:35.32, lo:129.3, d:'Südkoreanischer AKW-Cluster'},
-];
-const SANCTIONS = [
-  {n:'Russland', la:55.75, lo:37.6, d:'Umfangreiche westliche Sanktionen seit 2022'},
-  {n:'Iran', la:35.7, lo:51.4, d:'Nuklearprogramm-bezogene Sanktionen'},
-  {n:'Nordkorea', la:39.0, lo:125.75, d:'UN-Sanktionen (Nuklearwaffen)'},
-  {n:'Syrien', la:33.5, lo:36.3, d:'Sanktionen wegen Bürgerkrieg'},
-  {n:'Venezuela', la:10.5, lo:-66.9, d:'Öl- und Finanzsanktionen'},
-  {n:'Belarus', la:53.9, lo:27.57, d:'Sanktionen seit 2020/2022'},
-  {n:'Myanmar', la:16.8, lo:96.15, d:'Sanktionen nach Militärputsch'},
-  {n:'Kuba', la:23.1, lo:-82.4, d:'Langjähriges US-Embargo'},
-];
-const DEMO_CONFLICTS = [
-  {la:48.4,lo:37.8,n:'Ostukraine',c:'conflict',i:'Anhaltende Frontkämpfe'},
-  {la:31.5,lo:34.45,n:'Gaza',c:'conflict',i:'Bewaffneter Konflikt'},
-  {la:33.5,lo:36.3,n:'Syrien',c:'battle',i:'Lokale Gefechte'},
-  {la:15.35,lo:44.2,n:'Jemen (Sanaa)',c:'conflict',i:'Bürgerkrieg / Huthi'},
-  {la:15.6,lo:32.5,n:'Sudan (Khartum)',c:'conflict',i:'RSF vs. Armee'},
-  {la:9.0,lo:7.5,n:'Nigeria',c:'battle',i:'Aufstände im Norden'},
-  {la:33.3,lo:44.4,n:'Irak (Bagdad)',c:'battle',i:'Sporadische Anschläge'},
-  {la:34.5,lo:69.2,n:'Afghanistan (Kabul)',c:'conflict',i:'Instabile Lage'},
-  {la:4.85,lo:31.6,n:'Südsudan',c:'battle',i:'Ethnische Konflikte'},
-  {la:12.65,lo:-8.0,n:'Mali',c:'battle',i:'Sahel-Aufstand'},
-  {la:48.0,lo:66.0,n:'Zentralasien',c:'protest',i:'Vereinzelte Proteste'},
-  {la:37.0,lo:35.3,n:'Südtürkei',c:'protest',i:'Demonstrationen'},
-  {la:6.5,lo:3.4,n:'Lagos',c:'protest',i:'Soziale Unruhen'},
-  {la:-1.3,lo:36.8,n:'Nairobi',c:'protest',i:'Proteste'},
-  {la:33.9,lo:35.5,n:'Beirut',c:'protest',i:'Wirtschaftskrise-Proteste'},
-];
-
-function renderInfra(){
-  PIPELINES.forEach(p=>{
-    const grp = p.t==='oil'?L_.pipeOil:L_.pipeGas;
-    L.polyline(p.c,{color:grp.color,weight:2.5,opacity:.85,dashArray:p.t==='gas'?'7 5':null})
-      .bindPopup(`<b>${p.n}</b><br><span class="tag" style="background:${grp.color}22;color:${grp.color}">${p.t==='oil'?'Ölpipeline':'Gaspipeline'}</span>`)
-      .addTo(grp.group);
-  });
-  ROUTES.forEach(r=>L.polyline(r.c,{color:L_.routes.color,weight:1.8,opacity:.6})
-    .bindPopup(`<b>${r.n}</b><br><span class="tag" style="background:#21c7d622;color:#21c7d6">Seehandelsroute</span>`).addTo(L_.routes.group));
-  CHOKES.forEach(c=>L.circleMarker([c.la,c.lo],{radius:6,color:L_.choke.color,fillColor:L_.choke.color,fillOpacity:.7,weight:2})
-    .bindPopup(`<b>${c.n}</b><br>${c.d}<br><span class="tag" style="background:#3ecf8e22;color:#3ecf8e">Chokepoint</span>`).addTo(L_.choke.group));
-  PORTS.forEach(p=>L.circleMarker([p.la,p.lo],{radius:5,color:L_.ports.color,fillColor:L_.ports.color,fillOpacity:.7,weight:2})
-    .bindPopup(`<b>${p.n}</b><br>${p.d}<br><span class="tag" style="background:#5b9bff22;color:#5b9bff">Hafen</span>`).addTo(L_.ports.group));
-  NUCLEAR.forEach(n=>L.circleMarker([n.la,n.lo],{radius:6,color:L_.nuclear.color,fillColor:L_.nuclear.color,fillOpacity:.5,weight:2})
-    .bindPopup(`<b>☢ ${n.n}</b><br>${n.d}<br><span class="tag" style="background:#ffe14d22;color:#ffe14d">Atomkraftwerk</span>`).addTo(L_.nuclear.group));
-  SANCTIONS.forEach(s=>L.circleMarker([s.la,s.lo],{radius:8,color:L_.sanctions.color,fillColor:L_.sanctions.color,fillOpacity:.25,weight:2,dashArray:'3 3'})
-    .bindPopup(`<b>${s.n}</b><br>${s.d}<br><span class="tag" style="background:#ff5da222;color:#ff5da2">Sanktioniert</span>`).addTo(L_.sanctions.group));
-
-  setCnt('pipeOil',PIPELINES.filter(p=>p.t==='oil').length);
-  setCnt('pipeGas',PIPELINES.filter(p=>p.t==='gas').length);
-  setCnt('routes',ROUTES.length);setCnt('choke',CHOKES.length);
-  setCnt('ports',PORTS.length);setCnt('nuclear',NUCLEAR.length);setCnt('sanctions',SANCTIONS.length);
-}
-function setCnt(k,v){const el=document.getElementById('cnt-'+k);if(el)el.textContent=v;}
-renderInfra();
-
-function setStatus(t,state){
-  document.getElementById('statusText').textContent=t;
-  document.getElementById('statusDot').className='dot'+(state==='load'?' load':state==='err'?' err':'');
-}
-
-let conflictStore = [];
-async function loadConflicts(){
-  setStatus('Lade Konfliktdaten…','load');
-  ['conflict','battle','protest'].forEach(k=>L_[k].group.clearLayers());
-  conflictStore=[];
-  if(CONFIG.USE_BACKEND){
-    try{
-      const res=await fetch(`${CONFIG.BACKEND_BASE}/conflicts`);
-      const data=await res.json();
-      placeConflicts(data.events||[]);
-      setStatus(`${conflictStore.length} Live-Ereignisse`,'ok');
-    }catch(e){ console.error(e); useDemo('Backend-Fehler'); }
-  } else { useDemo('Demodaten'); }
-  updateTotals();
-}
-function placeConflicts(events){
-  events.forEach(ev=>{
-    const cat = ev.c || 'conflict';
-    const lg = L_[cat] || L_.conflict;
-    const r = ev.count ? Math.min(4+Math.log(ev.count+1)*2.2,15) : 7;
-    L.circleMarker([ev.la,ev.lo],{radius:r,color:lg.color,fillColor:lg.color,fillOpacity:.35,weight:1.5})
-      .bindPopup(`<b>${ev.n}</b><br>${ev.i||''}${ev.count?`<br><span style="color:#7e8b9d">${ev.count} Meldungen</span>`:''}
-        <br><span class="tag" style="background:${lg.color}22;color:${lg.color}">${lg.name}</span>`)
-      .addTo(lg.group);
-    conflictStore.push(ev);
-  });
-}
-function useDemo(reason){
-  placeConflicts(DEMO_CONFLICTS);
-  setStatus(`${conflictStore.length} Ereignisse · ${reason}`, CONFIG.USE_BACKEND?'err':'ok');
-}
-function updateTotals(){
-  ['conflict','battle','protest'].forEach(k=>
-    setCnt(k, conflictStore.filter(e=>(e.c||'conflict')===k).length));
-  document.getElementById('evtTotal').textContent=conflictStore.length;
-}
-
-let planeTimer=null;
-async function loadPlanes(){
-  L_.planes.group.clearLayers();
-  if(!CONFIG.USE_BACKEND){
-    const demo=[[51,5,'DLH441'],[40,-73,'UAL88'],[25,55,'UAE12'],[35,139,'JAL6'],[1.3,103.8,'SIA22']];
-    demo.forEach(d=>planeMarker(d[0],d[1],Math.random()*360,d[2]+' (Demo)'));
-    setCnt('planes','demo');
-    return;
-  }
-  try{
-    const b=map.getBounds();
-    const res=await fetch(`${CONFIG.BACKEND_BASE}/planes?lamin=${b.getSouth()}&lomin=${b.getWest()}&lamax=${b.getNorth()}&lomax=${b.getEast()}`);
-    const data=await res.json();
-    (data.states||[]).slice(0,200).forEach(s=>{
-      if(s[5]&&s[6]) planeMarker(s[6],s[5],s[10]||0,(s[1]||'').trim()||s[0]);
-    });
-    setCnt('planes',(data.states||[]).length);
-  }catch(e){console.error(e);}
-}
-function planeMarker(la,lo,heading,label){
-  const icon=L.divIcon({className:'',html:`<div class="plane-icon" style="transform:rotate(${heading}deg)">✈</div>`,iconSize:[16,16]});
-  L.marker([la,lo],{icon}).bindPopup(`<b>${label}</b><br>Flug · Kurs ${Math.round(heading)}°`).addTo(L_.planes.group);
-}
-document.getElementById('planeBtn').onclick=()=>{
-  const t=document.querySelector('#airList .layer-toggle');
-  L_.planes.on=!L_.planes.on;
-  t.classList.toggle('off',!L_.planes.on);
-  if(L_.planes.on){map.addLayer(L_.planes.group);loadPlanes();planeTimer=setInterval(loadPlanes,15000);}
-  else{map.removeLayer(L_.planes.group);clearInterval(planeTimer);}
-};
-document.getElementById('refreshBtn').onclick=()=>{loadConflicts();if(L_.planes.on)loadPlanes();};
-
-setInterval(()=>{document.getElementById('utcTime').textContent=
-  new Date().toISOString().substr(11,5);},1000);
-
-/* ════════ KI-REGIONSABFRAGE ════════ */
-const aiPanel=document.getElementById('ai'),aiBody=document.getElementById('aiBody');
-const askInput=document.getElementById('askInput'),sendBtn=document.getElementById('sendBtn');
-let currentRegion=null, history=[];
-
-function nearby(lat,lng,arr,getLa,getLo,getName,radiusDeg=12){
-  return arr.filter(o=>Math.abs(getLa(o)-lat)<radiusDeg&&Math.abs(getLo(o)-lng)<radiusDeg).map(getName);
-}
-map.on('click',async e=>{
-  const {lat,lng}=e.latlng;
-  currentRegion={lat:lat.toFixed(2),lng:lng.toFixed(2)};
-  history=[]; aiBody.innerHTML='';
-  document.getElementById('emptyState')?.remove();
-  document.getElementById('aiCoords').textContent=`${currentRegion.lat}°, ${currentRegion.lng}°`;
-  document.getElementById('aiRegion').textContent='Ermittle Region…';
-  const ctxConflicts=conflictStore.filter(c=>Math.abs(c.la-lat)<12&&Math.abs(c.lo-lng)<12).map(c=>c.n+' ('+(c.i||'')+')');
-  const ctxPorts=nearby(lat,lng,PORTS,p=>p.la,p=>p.lo,p=>p.n);
-  const ctxNuc=nearby(lat,lng,NUCLEAR,n=>n.la,n=>n.lo,n=>n.n);
-  const ctxChoke=nearby(lat,lng,CHOKES,c=>c.la,c=>c.lo,c=>c.n);
-  const ctxSanc=nearby(lat,lng,SANCTIONS,s=>s.la,s=>s.lo,s=>s.n,15);
-  currentRegion.context={conflicts:ctxConflicts,ports:ctxPorts,nuclear:ctxNuc,chokes:ctxChoke,sanctions:ctxSanc};
-  const parts=[];
-  if(ctxConflicts.length)parts.push(`${ctxConflicts.length} Konflikt(e)`);
-  if(ctxChoke.length)parts.push(`${ctxChoke.length} Chokepoint(s)`);
-  if(ctxPorts.length)parts.push(`${ctxPorts.length} Hafen/Häfen`);
-  if(ctxNuc.length)parts.push(`${ctxNuc.length} AKW`);
-  document.getElementById('aiCtx').textContent=parts.length?('Erkannt: '+parts.join(' · ')):'';
-  aiPanel.classList.add('open');
-  reverseGeocode(lat,lng);
-});
-async function reverseGeocode(lat,lng){
-  try{
-    const r=await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=5&accept-language=de`);
-    const d=await r.json();
-    const name=d.address?.country||d.display_name||`Region ${currentRegion.lat}, ${currentRegion.lng}`;
-    document.getElementById('aiRegion').textContent=name; currentRegion.name=name;
-  }catch{
-    document.getElementById('aiRegion').textContent=`Region ${currentRegion.lat}, ${currentRegion.lng}`;
-    currentRegion.name='diese Region';
-  }
-}
-document.getElementById('closeAi').onclick=()=>aiPanel.classList.remove('open');
-document.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{askInput.value=c.dataset.q;sendQuestion();});
-sendBtn.onclick=sendQuestion;
-askInput.addEventListener('input',()=>{askInput.style.height='auto';askInput.style.height=Math.min(askInput.scrollHeight,120)+'px';});
-askInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendQuestion();}});
-
-function buildContextString(){
-  const c=currentRegion.context||{};
-  const lines=[];
-  if(c.conflicts?.length)lines.push('Aktive Ereignisse in der Nähe: '+c.conflicts.join('; '));
-  if(c.chokes?.length)lines.push('Strategische Chokepoints: '+c.chokes.join(', '));
-  if(c.ports?.length)lines.push('Häfen: '+c.ports.join(', '));
-  if(c.nuclear?.length)lines.push('Atomkraftwerke: '+c.nuclear.join(', '));
-  if(c.sanctions?.length)lines.push('Sanktionierte Staaten in Reichweite: '+c.sanctions.join(', '));
-  return lines.length?('\n\nLokaler Kartenkontext:\n'+lines.join('\n')):'';
-}
-async function sendQuestion(){
-  const q=askInput.value.trim();
-  if(!q||!currentRegion)return;
-  askInput.value='';askInput.style.height='auto';
-  sendBtn.disabled=true;
-  appendMsg('user',q);
-  const el=appendMsg('ai','');el.classList.add('thinking');el.textContent='Analysiere…';
-  const sys=`Du bist ein erfahrener geopolitischer Analyst. Der Nutzer hat auf einer interaktiven Weltkarte die Region "${currentRegion.name}" (${currentRegion.lat}°, ${currentRegion.lng}°) ausgewählt. Beantworte Fragen zu Konflikten, Pipelines, Handelsrouten, Häfen, Chokepoints, Atomkraftwerken, Sanktionen und Machtinteressen. Sei präzise, faktenbasiert, einordnend. Nutze den mitgelieferten Kartenkontext, wenn relevant. Antworte auf Deutsch, kompakt (max ~220 Wörter), mit konkreten Namen. Nenne Unsicherheiten offen.${buildContextString()}`;
-  history.push({role:'user',content:q});
-  if(!CONFIG.USE_BACKEND){
-    el.classList.remove('thinking');
-    el.innerHTML=`<b>KI benötigt das Backend.</b>\n\nDie Anthropic-API kann aus Sicherheitsgründen nicht direkt aus dem Browser aufgerufen werden. Sobald die Netlify-Function <b>ai.js</b> eingerichtet und oben <b>USE_BACKEND = true</b> gesetzt ist, beantworte ich deine Frage hier – inklusive des erkannten Kontexts:\n\n${buildContextString()||'(kein lokaler Kontext in dieser Region)'}`;
-    sendBtn.disabled=false;
-    return;
-  }
-  try{
-    const res=await fetch(`${CONFIG.BACKEND_BASE}/ai`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({system:sys,messages:history})
-    });
-    const data=await res.json();
-    const text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim()||'(Keine Antwort)';
-    history.push({role:'assistant',content:text});
-    el.classList.remove('thinking');renderAi(el,text);
-  }catch(err){
-    el.classList.remove('thinking');el.textContent='Fehler: '+err.message;
-  }
-  sendBtn.disabled=false;aiBody.scrollTop=aiBody.scrollHeight;
-}
-function appendMsg(role,text){const el=document.createElement('div');el.className='msg '+role;el.textContent=text;
-  aiBody.appendChild(el);aiBody.scrollTop=aiBody.scrollHeight;return el;}
-function renderAi(el,text){el.innerHTML=text.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');}
-
-document.getElementById('backendNote').textContent = CONFIG.USE_BACKEND
-  ? 'Backend aktiv · Live-Daten über Netlify Functions'
-  : 'Demo-Modus · für Live-Daten Netlify Functions + USE_BACKEND=true';
-
-loadConflicts();
-</script>
+<script src="assets/data/reference.js"></script>
+<script src="assets/js/app.js"></script>
 </body>
 </html>
