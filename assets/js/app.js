@@ -3828,30 +3828,8 @@ function ruleBasedSuggest(text) {
   return [...found];
 }
 
-// ⚡ Vorschlag: NUR Regel-basiert, instant, KEINE KI
-function ruleOnlySuggest() {
-  const name = document.getElementById('newProjName').value.trim();
-  const thesis = document.getElementById('newProjThesis').value.trim();
-  const combined = `${name}. ${thesis}`.trim();
-  if (combined.length < 10) return toast('Mehr Titel/These eingeben');
-
-  const ruleHits = ruleBasedSuggest(combined);
-  const preview = document.getElementById('suggestPreview');
-  preview.style.display = 'block';
-
-  if (!ruleHits.length) {
-    preview.innerHTML = `<i style="color:var(--ink-faint)">Keine Stichwort-Treffer in den Regeln. Drücke 🤖 KI für Tiefenanalyse, oder gib Länder manuell ein.</i>`;
-    return;
-  }
-  const previewHtml = ruleHits.slice(0,30).map(iso => {
-    const cName = window.getCountryProfile?.(iso)?.name || iso;
-    return `<span>${flagEmoji(iso)} ${escapeHtml(cName)}</span>`;
-  }).join(' · ');
-  preview.innerHTML = `<b style="color:var(--choke)">⚡ Regel-basiert (${ruleHits.length} Länder):</b><br>${previewHtml}${ruleHits.length>30?` <i>+${ruleHits.length-30} weitere</i>`:''}<br><small style="color:var(--ink-faint);font-size:10px">Drücke 🤖 KI für Tiefenanalyse mit Rollen & Begründung.</small>`;
-  document.getElementById('newProjCountries').value = ruleHits.join(', ');
-}
-
-// 🤖 KI: explizite Background-Analyse (kann lange dauern)
+// 🤖 KI-Vorschlag: Hauptfunktion - KI macht die Analyse
+// Während KI läuft: instant Regel-basierte Vorschau als "während du wartest"
 async function aiOnlySuggest() {
   const name = document.getElementById('newProjName').value.trim();
   const thesis = document.getElementById('newProjThesis').value.trim();
@@ -3860,27 +3838,33 @@ async function aiOnlySuggest() {
 
   const preview = document.getElementById('suggestPreview');
   preview.style.display = 'block';
-  const existingHtml = preview.innerHTML;
 
-  // Pre-existing countries als Basis nutzen
-  const existingField = document.getElementById('newProjCountries').value.trim();
-  const baseCountries = existingField ? existingField.split(/[,;\s]+/).filter(Boolean).map(c=>c.toUpperCase()) : ruleBasedSuggest(combined);
+  // Instant Vorschau: Regel-Match (damit der User sofort etwas sieht)
+  const ruleHits = ruleBasedSuggest(combined);
+  if (ruleHits.length) {
+    document.getElementById('newProjCountries').value = ruleHits.join(', ');
+    const previewHtml = ruleHits.slice(0,20).map(iso => {
+      const cName = window.getCountryProfile?.(iso)?.name || iso;
+      return `<span>${flagEmoji(iso)} ${escapeHtml(cName)}</span>`;
+    }).join(' · ');
+    preview.innerHTML = `<i style="color:var(--ink-faint);font-size:10px">⏳ Sofort-Vorschau (Stichwort-Match, ${ruleHits.length}):</i><br>${previewHtml}<br><br><i style="color:var(--protest)">🤖 KI startet die Tiefenanalyse…</i>`;
+  } else {
+    preview.innerHTML = '<i style="color:var(--protest)">🤖 KI startet (kein Stichwort-Match in Regeln)…</i>';
+  }
 
   const btn = document.getElementById('suggestAiBtn');
   const origBtn = btn.textContent;
   btn.disabled = true; btn.textContent = '… KI 0s';
 
   try {
-    preview.innerHTML = `<i style="color:var(--protest)">🤖 KI startet (Background, max 120s)…</i>`;
     const data = await window.runBackgroundJob('projectanalyze', {
-      thesis: combined, baseCountries, webSearch: false
+      thesis: combined, baseCountries: ruleHits, webSearch: false
     }, {
-      maxWaitSec: 120,
+      maxWaitSec: 180,
       pollIntervalMs: 2500,
       onProgress: (i) => {
         const sec = Math.round(i * 2.5);
         btn.textContent = `… KI ${sec}s`;
-        preview.innerHTML = `<i style="color:var(--protest)">🤖 KI arbeitet (${sec}s)…</i>`;
       }
     });
 
@@ -3888,27 +3872,27 @@ async function aiOnlySuggest() {
     if (countries.length) {
       const isos = countries.map(c => c.iso);
       document.getElementById('newProjCountries').value = isos.join(', ');
-      preview.innerHTML = `<b style="color:var(--protest)">🤖 KI-Vorschlag (${countries.length} Länder, ${data.model||'?'}):</b><br>` +
-        countries.slice(0,18).map(c => {
+      preview.innerHTML = `<b style="color:var(--protest)">🤖 KI-Analyse (${countries.length} Länder · ${data.model||'?'}):</b><br>` +
+        countries.slice(0,20).map(c => {
           const cName = window.getCountryProfile?.(c.iso)?.name || c.iso;
           return `<span title="${escapeHtml(c.reason||'')}">${flagEmoji(c.iso)} ${escapeHtml(cName)} <small style="opacity:.7">(${c.role||'?'})</small></span>`;
         }).join(' · ') +
-        (countries.length > 18 ? ` <i>+${countries.length-18} weitere</i>` : '') +
+        (countries.length > 20 ? ` <i>+${countries.length-20} weitere</i>` : '') +
         (data.summary ? `<br><br><b style="color:var(--accent)">KI-Zusammenfassung:</b><br>${escapeHtml(data.summary)}` : '');
     } else {
-      preview.innerHTML = existingHtml + `<br><small style="color:var(--ink-faint)">KI hat keine Länder geliefert.</small>`;
+      preview.innerHTML += `<br><small style="color:var(--ink-faint)">KI fand keine zusätzlichen Länder.</small>`;
     }
   } catch (e) {
-    console.error('KI-Job-Fehler:', e);
-    preview.innerHTML = existingHtml + `<br><small style="color:var(--conflict);font-size:10px">⚠ KI: ${escapeHtml(e.message)}</small>`;
+    console.error('KI-Background-Fehler:', e);
+    let hint = '';
+    if (e.message.includes('Timeout')) hint = ' Probier kürzere These oder Anthropic-Quota prüfen.';
+    else if (e.message.includes('credit') || e.message.includes('balance')) hint = ' Anthropic-Guthaben prüfen (console.anthropic.com).';
+    preview.innerHTML += `<br><small style="color:var(--conflict);font-size:10px"><b>⚠ KI:</b> ${escapeHtml(e.message)}${hint}</small>`;
   }
   btn.disabled = false; btn.textContent = origBtn;
 }
 
-document.getElementById('suggestCountriesBtn')?.addEventListener('click', ruleOnlySuggest);
 document.getElementById('suggestAiBtn')?.addEventListener('click', aiOnlySuggest);
-
-// Kein Auto-Trigger mehr beim Tippen - User entscheidet via Buttons
 
 document.getElementById('newProjCreate')?.addEventListener('click', async () => {
   const name = document.getElementById('newProjName').value.trim();
