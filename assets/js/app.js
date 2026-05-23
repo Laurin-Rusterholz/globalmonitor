@@ -2574,6 +2574,24 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(item => {
         } catch { toast('Land-Erkennung fehlgeschlagen'); }
         break;
       }
+      case 'note': {
+        // Kontextabhängig: Im Projekt-Modus → Projekt-Notiz, sonst → Country-Notiz
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=5&accept-language=de`);
+          const d = await r.json();
+          const iso = d.address?.country_code?.toUpperCase();
+          const name = d.address?.country || iso;
+          if (!iso) return toast('Kein Land an dieser Stelle');
+          if (activeProject) {
+            openProjectNoteModal(iso, name);
+            toast('Projekt-Notiz für ' + name);
+          } else {
+            openNoteModal(iso, name);
+            toast('Notiz für ' + name);
+          }
+        } catch { toast('Land-Erkennung fehlgeschlagen'); }
+        break;
+      }
       case 'compare': {
         try {
           const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=5&accept-language=de`);
@@ -4226,27 +4244,68 @@ function renderProjNotes(body) {
   const p = activeProject;
   const allNotes = [];
   Object.entries(p.countryNotes||{}).forEach(([iso, notes]) => {
-    notes.forEach(n => allNotes.push({...n, iso}));
+    notes.forEach((n, idx) => allNotes.push({...n, iso, _idx: idx}));
   });
   allNotes.sort((a,b) => new Date(b.created) - new Date(a.created));
 
-  let html = `<div class="proj-section"><h4>📝 Alle Projekt-Notizen (${allNotes.length})</h4>`;
+  let html = `<div class="proj-section"><h4>📝 Notizen-Dokumente (${allNotes.length}) <button id="exportNotesBtn">⬇ MD</button></h4>`;
   if (!allNotes.length) {
-    html += `<div class="conn-empty">Noch keine Notizen. Klicke im Länder-Tab auf "Notiz" um eine anzulegen.</div>`;
+    html += `<div class="conn-empty">Noch keine Notizen. Klicke Rechts-Klick auf Karte → "📝 Notiz für dieses Land" oder im Länder-Tab "✏ Notiz".</div>`;
   } else {
-    allNotes.forEach(n => {
+    allNotes.forEach((n, i) => {
       const name = window.getCountryProfile?.(n.iso)?.name || n.iso;
-      html += `<div class="proj-note-item">
-        <div class="proj-note-head">
-          <div class="proj-note-title"><span class="flag">${flagEmoji(n.iso)}</span> ${escapeHtml(n.title)} <span style="font-size:10px;color:var(--ink-faint)">· ${escapeHtml(name)}</span></div>
+      const md = markdownish(n.content || '');
+      html += `<div class="proj-note-doc">
+        <div class="pnd-head">
+          <div class="pnd-meta">
+            <span class="pnd-flag">${flagEmoji(n.iso)}</span>
+            <span class="pnd-title">${escapeHtml(n.title || 'Notiz')}</span>
+          </div>
+          <div class="pnd-actions">
+            <button data-act="goto" data-iso="${n.iso}">📍</button>
+            <button data-act="edit" data-iso="${n.iso}" data-i="${n._idx}">✏</button>
+            <button data-act="del" data-iso="${n.iso}" data-i="${n._idx}">🗑</button>
+          </div>
         </div>
-        <div class="proj-note-content">${escapeHtml(n.content)}</div>
-        <div class="proj-note-meta">${new Date(n.created).toLocaleString('de-CH')}</div>
+        <div style="font-size:10px;color:var(--ink-faint);letter-spacing:.05em;margin-bottom:6px">
+          ${escapeHtml(name)} · ${new Date(n.created).toLocaleString('de-CH')}
+        </div>
+        <div class="pnd-content">${md}</div>
+        ${n.tags?.length ? `<div class="pnd-tags">${n.tags.map(t => `<span class="pnd-tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
       </div>`;
     });
   }
   html += `</div>`;
   body.innerHTML = html;
+
+  body.querySelectorAll('button[data-act]').forEach(btn => {
+    btn.onclick = async () => {
+      const iso = btn.dataset.iso;
+      const cName = window.getCountryProfile?.(iso)?.name || iso;
+      if (btn.dataset.act === 'goto') {
+        const c = R?.countryCenters?.[iso];
+        if (c) map.flyTo(c, 6, {duration:0.8});
+      } else if (btn.dataset.act === 'del') {
+        if (!confirm('Notiz löschen?')) return;
+        const idx = +btn.dataset.i;
+        activeProject.countryNotes[iso].splice(idx, 1);
+        await saveProject();
+        renderProjectTab('notes');
+        renderProjectNoteMarkers();
+      } else if (btn.dataset.act === 'edit') {
+        const idx = +btn.dataset.i;
+        const note = activeProject.countryNotes[iso][idx];
+        openProjectNoteModal(iso, cName);
+        // Vorbefüllen
+        setTimeout(() => {
+          document.getElementById('projNoteTitle').value = note.title || '';
+          document.getElementById('projNoteContent').value = note.content || '';
+          document.getElementById('projectNoteModal').dataset.editIdx = idx;
+        }, 80);
+      }
+    };
+  });
+  document.getElementById('exportNotesBtn')?.addEventListener('click', exportProjectMarkdown);
 }
 
 function renderProjChat(body) {
@@ -4495,6 +4554,189 @@ window.loadAllResearch = async function() {
     el.onclick = () => { document.getElementById('researchPanel').classList.remove('open'); loadProject(el.dataset.pid); };
   });
 };
+
+/* ════════════════════════════════════════════════════════════════
+   PROJEKT-ZEICHEN-WERKZEUGE (Leaflet.draw)
+   ════════════════════════════════════════════════════════════════ */
+let drawnItems = L.featureGroup();
+let drawControl = null;
+let drawingActive = false;
+
+function toggleDrawing() {
+  if (!activeProject) { toast('Nur im Projekt-Modus'); return; }
+  drawingActive = !drawingActive;
+  const btn = document.getElementById('ptbDraw');
+  btn.classList.toggle('active', drawingActive);
+  if (drawingActive) {
+    if (!map.hasLayer(drawnItems)) map.addLayer(drawnItems);
+    // Gespeicherte Annotations laden
+    if (activeProject.drawings) {
+      try {
+        const gj = L.geoJSON(activeProject.drawings, {
+          style: { color:'#ffc83d', weight:3, fillColor:'#ffc83d', fillOpacity:0.2 }
+        });
+        gj.eachLayer(l => drawnItems.addLayer(l));
+      } catch {}
+    }
+    if (!drawControl) {
+      drawControl = new L.Control.Draw({
+        edit: { featureGroup: drawnItems },
+        draw: {
+          polygon: { shapeOptions: { color:'#ffc83d', weight:3, fillOpacity:0.2 } },
+          polyline: { shapeOptions: { color:'#ffc83d', weight:3 } },
+          rectangle: { shapeOptions: { color:'#ffc83d', weight:3, fillOpacity:0.2 } },
+          circle: { shapeOptions: { color:'#ffc83d', weight:3, fillOpacity:0.2 } },
+          marker: false, circlemarker: false
+        }
+      });
+    }
+    map.addControl(drawControl);
+    map.on(L.Draw.Event.CREATED, onDrawCreated);
+    map.on(L.Draw.Event.EDITED, saveDrawings);
+    map.on(L.Draw.Event.DELETED, saveDrawings);
+    toast('Zeichnen aktiv - wähle Werkzeug in Toolbar');
+  } else {
+    if (drawControl) map.removeControl(drawControl);
+    map.off(L.Draw.Event.CREATED, onDrawCreated);
+    toast('Zeichnen aus - Skizzen bleiben');
+  }
+}
+async function onDrawCreated(e) {
+  drawnItems.addLayer(e.layer);
+  // Optional Beschriftung
+  const label = prompt('Beschriftung für diese Zeichnung (optional):', '');
+  if (label) e.layer.bindTooltip(label, { permanent: true, direction: 'center', className: 'draw-label' });
+  saveDrawings();
+}
+async function saveDrawings() {
+  if (!activeProject) return;
+  const geojson = drawnItems.toGeoJSON();
+  await saveProject({ drawings: geojson });
+}
+document.getElementById('ptbDraw')?.addEventListener('click', toggleDrawing);
+document.getElementById('ptbClear')?.addEventListener('click', () => {
+  if (!confirm('Alle Zeichnungen löschen?')) return;
+  drawnItems.clearLayers();
+  saveDrawings();
+});
+
+/* ════════════════════════════════════════════════════════════════
+   CONNECTION-LINIEN ZWISCHEN PROJEKT-LÄNDERN
+   ════════════════════════════════════════════════════════════════ */
+let connectionLinesLayer = L.layerGroup();
+let connectionsActive = false;
+
+function toggleConnections() {
+  if (!activeProject) { toast('Nur im Projekt-Modus'); return; }
+  connectionsActive = !connectionsActive;
+  const btn = document.getElementById('ptbConnect');
+  btn.classList.toggle('active', connectionsActive);
+  if (connectionsActive) {
+    renderConnectionLines();
+    if (!map.hasLayer(connectionLinesLayer)) map.addLayer(connectionLinesLayer);
+  } else {
+    connectionLinesLayer.clearLayers();
+    map.removeLayer(connectionLinesLayer);
+  }
+}
+
+function renderConnectionLines() {
+  connectionLinesLayer.clearLayers();
+  if (!activeProject) return;
+  const list = activeProject.relatedCountries?.length
+    ? activeProject.relatedCountries
+    : activeProject.countries.map(iso => ({iso, role:'primary'}));
+  // Sammle Koordinaten
+  const points = list.map(c => ({
+    iso: c.iso, role: c.role || 'primary',
+    coords: R?.countryCenters?.[c.iso]
+  })).filter(p => p.coords);
+
+  // Linien zwischen primary ↔ secondary, primary ↔ target etc.
+  const primary = points.filter(p => p.role === 'primary');
+  const targets = points.filter(p => ['target','secondary','beneficiary','loser'].includes(p.role));
+
+  // Linien von jedem primary zu jedem target
+  primary.forEach(p => {
+    targets.forEach(t => {
+      const color = t.role === 'target' ? '#ff5da2' :
+                    t.role === 'beneficiary' ? '#3ecf8e' :
+                    t.role === 'loser' ? '#c77dff' : '#ff7847';
+      L.polyline([p.coords, t.coords], {
+        color, weight: 2, opacity: 0.65,
+        dashArray: '5 5', className: 'connection-line'
+      }).addTo(connectionLinesLayer);
+    });
+  });
+  // Zusätzlich: alle primary-zu-primary (Allianz)
+  for (let i = 0; i < primary.length; i++) {
+    for (let j = i+1; j < primary.length; j++) {
+      L.polyline([primary[i].coords, primary[j].coords], {
+        color: '#3ecf8e', weight: 1.5, opacity: 0.4,
+        className: 'connection-line'
+      }).addTo(connectionLinesLayer);
+    }
+  }
+  toast(`${connectionLinesLayer.getLayers().length} Verbindungslinien`);
+}
+document.getElementById('ptbConnect')?.addEventListener('click', toggleConnections);
+
+/* ════════════════════════════════════════════════════════════════
+   PROJEKT EXPORT (Markdown)
+   ════════════════════════════════════════════════════════════════ */
+function exportProjectMarkdown() {
+  if (!activeProject) return;
+  const p = activeProject;
+  let md = `# ${p.name}\n\n`;
+  md += `**Erstellt:** ${new Date(p.created).toLocaleString('de-CH')}\n`;
+  md += `**Aktualisiert:** ${new Date(p.updated).toLocaleString('de-CH')}\n\n`;
+  md += `## These\n\n${p.thesis}\n\n`;
+  if (p.summary) md += `## KI-Zusammenfassung\n\n${p.summary}\n\n`;
+  if (p.thesisStrength) md += `**Plausibilität:** ${p.thesisStrength}\n\n`;
+  if (p.contextHints?.length) md += `## Kontext-Punkte\n\n${p.contextHints.map(h => '- '+h).join('\n')}\n\n`;
+  if (p.openQuestions?.length) md += `## Offene Fragen\n\n${p.openQuestions.map(h => '- '+h).join('\n')}\n\n`;
+
+  if (p.relatedCountries?.length) {
+    md += `## Beteiligte Länder (${p.relatedCountries.length})\n\n`;
+    p.relatedCountries.forEach(c => {
+      const cName = window.getCountryProfile?.(c.iso)?.name || c.iso;
+      md += `### ${cName} (${c.iso}) – ${c.role || 'primary'}\n\n`;
+      if (c.reason) md += `${c.reason}\n\n`;
+    });
+  }
+  if (p.actors?.length) {
+    md += `## Akteure\n\n`;
+    p.actors.forEach(a => {
+      md += `- **${a.name}** (${a.type || '?'}): ${a.role || ''} – ${a.stake || ''}\n`;
+    });
+    md += '\n';
+  }
+  if (p.countryNotes) {
+    md += `## Notizen pro Land\n\n`;
+    Object.entries(p.countryNotes).forEach(([iso, notes]) => {
+      if (!notes?.length) return;
+      const cName = window.getCountryProfile?.(iso)?.name || iso;
+      md += `### ${cName} (${iso})\n\n`;
+      notes.forEach(n => {
+        md += `#### ${n.title || 'Notiz'} *(${new Date(n.created).toLocaleString('de-CH')})*\n\n${n.content}\n\n`;
+      });
+    });
+  }
+  if (p.chatHistory?.length) {
+    md += `## KI-Chat-Verlauf\n\n`;
+    p.chatHistory.forEach(m => {
+      md += `**${m.role === 'user' ? 'Frage' : 'KI'}:** ${m.content}\n\n`;
+    });
+  }
+  // Download
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${p.name.replace(/[^a-z0-9]/gi,'_')}_${new Date().toISOString().slice(0,10)}.md`;
+  a.click(); URL.revokeObjectURL(url);
+  toast('Markdown exportiert');
+}
+document.getElementById('ptbExport')?.addEventListener('click', exportProjectMarkdown);
 
 /* ════ START ════ */
 buildCategoryUI();

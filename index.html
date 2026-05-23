@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
 <link rel="stylesheet" href="assets/css/app.css" />
 </head>
 <body>
@@ -89,6 +90,12 @@
       🔬 Projekt-Modus: <b id="projModeName">…</b>
       <button id="projModeExit">× Verlassen</button>
     </div>
+    <div class="proj-toolbar" id="projToolbar">
+      <button class="ptb-btn" id="ptbDraw" title="Zeichnen-Modus">✏ Zeichnen</button>
+      <button class="ptb-btn" id="ptbConnect" title="Verbindungslinien zwischen Projekt-Ländern">🔗 Linien</button>
+      <button class="ptb-btn" id="ptbClear" title="Alle Zeichnungen löschen">🗑 Clear</button>
+      <button class="ptb-btn" id="ptbExport" title="Projekt als Markdown exportieren">⬇ Export</button>
+    </div>
     <div id="legend"></div>
     <div class="proj-status-banner" id="projStatusBanner">
       <span>🔬 Recherche-Projekt aktiv: <b id="projStatusName">…</b></span>
@@ -100,6 +107,7 @@
     <div id="ctxMenu" class="ctx-menu">
       <div class="ctx-coord" id="ctxCoord"></div>
       <div class="ctx-item" data-act="profile">🌍 Land-Vollprofil öffnen</div>
+      <div class="ctx-item" data-act="note">📝 Notiz für dieses Land</div>
       <div class="ctx-item" data-act="compare">➕ Zum Vergleich</div>
       <div class="ctx-item" data-act="project">🔬 Neues Projekt zu dieser Region</div>
       <div class="ctx-item" data-act="ai">💬 KI-Chat zu dieser Region</div>
@@ -508,6 +516,7 @@
 <script src="https://unpkg.com/leaflet-side-by-side@2.2.0/leaflet-side-by-side.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
 <script src="assets/data/reference.js"></script>
 <script src="assets/data/sources.js"></script>
 <script src="assets/data/countries.js"></script>
