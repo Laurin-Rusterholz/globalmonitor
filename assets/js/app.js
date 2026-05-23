@@ -420,6 +420,76 @@ const CATEGORIES = [
   {id:'user',      n:'Eigene Daten',        ic:'📌', open:true},
 ];
 
+// Mapping: Layer-Key → Funktion, die {iso, name, cnt}-Liste der beteiligten Länder zurückgibt
+// Wird für aufklappbare Länder-Dropdowns in der Sidebar verwendet (Klick → Land-Dossier)
+function getLayerCountries(key) {
+  if (!R) return [];
+  const aggregate = (items, filter = null) => {
+    const map = new Map();
+    items.forEach(it => {
+      if (filter && !filter(it)) return;
+      const iso = (it.country || '').toUpperCase();
+      if (!iso) return;
+      const cur = map.get(iso) || { iso, cnt: 0, examples: [] };
+      cur.cnt++;
+      if (cur.examples.length < 4 && it.n) cur.examples.push(it.n);
+      map.set(iso, cur);
+    });
+    return [...map.values()].sort((a, b) => b.cnt - a.cnt);
+  };
+  switch (key) {
+    case 'resLi':       return aggregate(R.resources || [], it => it.type === 'lithium');
+    case 'resRee':      return aggregate(R.resources || [], it => it.type === 'rare_earth');
+    case 'resCu':       return aggregate(R.resources || [], it => it.type === 'copper' || it.type === 'cobalt');
+    case 'resU':        return aggregate(R.resources || [], it => it.type === 'uranium');
+    case 'resFe':       return aggregate(R.resources || [], it => it.type === 'iron');
+    case 'resOil':      return aggregate(R.resources || [], it => it.type === 'oil');
+    case 'resGas':      return aggregate(R.resources || [], it => it.type === 'gas');
+    case 'nuclear':     return aggregate(R.nuclear || []);
+    case 'ports':       return aggregate(R.ports || []);
+    case 'bases':       return aggregate(R.militaryBases || [], b => b.type !== 'naval' && b.type !== 'air');
+    case 'navalBases':  return aggregate(R.militaryBases || [], b => b.type === 'naval');
+    case 'airBases':    return aggregate(R.militaryBases || [], b => b.type === 'air');
+    case 'bri':         return aggregate(R.bri || []);
+    case 'launchSites': return aggregate(R.launchSites || []);
+    case 'exercises':   return aggregate(R.exercises || []);
+    case 'sanctions':   return aggregate(R.sanctions || []);
+    case 'action':      return aggregate(R.militaryActions || []);
+    default: return [];
+  }
+}
+
+const LAYERS_WITH_COUNTRIES = new Set([
+  'resLi','resRee','resCu','resU','resFe','resOil','resGas',
+  'nuclear','ports','bases','navalBases','airBases',
+  'bri','launchSites','exercises','sanctions','action'
+]);
+
+function renderLayerCountryList(key, container) {
+  const list = getLayerCountries(key);
+  if (!list.length) {
+    container.innerHTML = '<div class="lc-empty">Keine Länderdaten verfügbar.</div>';
+    return;
+  }
+  container.innerHTML = list.map(c => {
+    const cName = window.getCountryProfile?.(c.iso)?.name || c.iso;
+    const tooltip = c.examples.join(' · ');
+    return `<div class="lc-item" data-iso="${c.iso}" data-name="${escapeHtml(cName)}" title="${escapeHtml(tooltip)}">
+      <span class="lc-flag">${flagEmoji(c.iso)}</span>
+      <span class="lc-name">${escapeHtml(cName)}</span>
+      <span class="lc-cnt">${c.cnt}</span>
+    </div>`;
+  }).join('');
+  container.querySelectorAll('.lc-item').forEach(el => {
+    el.onclick = (ev) => {
+      ev.stopPropagation();
+      const iso = el.dataset.iso;
+      const name = el.dataset.name;
+      if (window.openCountryDossier) window.openCountryDossier(iso, name);
+    };
+  });
+}
+
 function buildCategoryUI() {
   const c = document.getElementById('categories');
   c.innerHTML = '';
@@ -442,6 +512,9 @@ function buildCategoryUI() {
 
     const body = div.querySelector(`#catbody-${cat.id}`);
     Object.entries(LAYERS).filter(([_, l]) => l.cat === cat.id).forEach(([key, l]) => {
+      const hasCountries = LAYERS_WITH_COUNTRIES.has(key);
+      const wrap = document.createElement('div');
+      wrap.className = 'layer-toggle-wrap';
       const el = document.createElement('div');
       el.className = 'layer-toggle' + (l.on ? '' : ' off');
       const swatchCls = l.line ? (l.dash ? 'swatch line dash' : 'swatch line') : 'swatch';
@@ -449,9 +522,28 @@ function buildCategoryUI() {
         <span class="${swatchCls}" style="background:${l.c};color:${l.c}"></span>
         <span class="name">${l.n}</span>
         <span class="cnt" id="cnt-${key}"></span>
+        ${hasCountries ? `<span class="expand" title="Länder mit ${l.n} anzeigen">▸</span>` : ''}
       `;
-      el.onclick = () => toggleLayer(key, el);
-      body.appendChild(el);
+      el.onclick = (ev) => {
+        // Klick auf Expand-Pfeil: nur Dropdown togglen, Layer nicht toggeln
+        if (ev.target.classList.contains('expand')) {
+          ev.stopPropagation();
+          wrap.classList.toggle('expanded');
+          el.classList.toggle('expanded');
+          if (wrap.classList.contains('expanded')) {
+            renderLayerCountryList(key, wrap.querySelector('.layer-countries'));
+          }
+          return;
+        }
+        toggleLayer(key, el);
+      };
+      wrap.appendChild(el);
+      if (hasCountries) {
+        const drop = document.createElement('div');
+        drop.className = 'layer-countries';
+        wrap.appendChild(drop);
+      }
+      body.appendChild(wrap);
     });
   });
 
@@ -4361,7 +4453,102 @@ function renderProjectTab(tab) {
   else if (tab === 'materials') renderProjMaterials(body);
   else if (tab === 'countries') renderProjCountries(body);
   else if (tab === 'notes') renderProjNotes(body);
+  else if (tab === 'maps') renderProjMaps(body);
   else if (tab === 'chat') renderProjChat(body);
+}
+
+/* Projekt-Karten-Tab: alle Layer-Toggles wie in der Haupt-Sidebar,
+   damit man im Projekt-Modus (Sidebar ist versteckt) trotzdem alle Karten
+   ein-/ausblenden kann. */
+function renderProjMaps(body) {
+  if (typeof LAYERS === 'undefined' || typeof CATEGORIES === 'undefined') {
+    body.innerHTML = '<div class="conn-empty">Layer noch nicht geladen.</div>';
+    return;
+  }
+  let html = `<div style="margin-bottom:12px;display:flex;gap:6px;flex-wrap:wrap">
+    <button class="tb-btn" id="projMapsAllOn">✓ Alle Karten an</button>
+    <button class="tb-btn" id="projMapsAllOff">✕ Alle Karten aus</button>
+    <button class="tb-btn" id="projMapsReset">↺ Default</button>
+  </div>`;
+  CATEGORIES.forEach(cat => {
+    const layersInCat = Object.entries(LAYERS).filter(([_, l]) => l.cat === cat.id);
+    if (!layersInCat.length) return;
+    html += `<div class="proj-section" style="padding:10px 12px;margin-bottom:10px">
+      <h4 style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin-bottom:8px">
+        <span>${cat.ic} ${escapeHtml(cat.n)}</span>
+        <span style="display:flex;gap:4px">
+          <button class="tb-btn" data-pmcat="${cat.id}" data-pmact="on" style="padding:3px 8px;font-size:9.5px">an</button>
+          <button class="tb-btn" data-pmcat="${cat.id}" data-pmact="off" style="padding:3px 8px;font-size:9.5px">aus</button>
+        </span>
+      </h4>`;
+    layersInCat.forEach(([key, l]) => {
+      const swatchCls = l.line ? (l.dash ? 'swatch line dash' : 'swatch line') : 'swatch';
+      html += `<div class="layer-toggle${l.on ? '' : ' off'}" data-pmkey="${key}" style="margin-bottom:3px">
+        <span class="${swatchCls}" style="background:${l.c};color:${l.c}"></span>
+        <span class="name">${escapeHtml(l.n)}</span>
+        <span class="cnt" style="color:var(--ink-faint);font-size:10px">${(document.getElementById('cnt-'+key)?.textContent)||''}</span>
+      </div>`;
+    });
+    html += `</div>`;
+  });
+  body.innerHTML = html;
+
+  // Einzel-Toggle
+  body.querySelectorAll('[data-pmkey]').forEach(el => {
+    el.onclick = () => {
+      const key = el.dataset.pmkey;
+      if (!LAYERS[key]) return;
+      // toggleLayer braucht das passende Element in der HAUPT-Sidebar als zweites Argument
+      const mainEl = document.querySelector(`#cnt-${key}`)?.parentElement;
+      toggleLayer(key, mainEl || el);
+      el.classList.toggle('off', !LAYERS[key].on);
+    };
+  });
+  // Kategorie-Toggles
+  body.querySelectorAll('[data-pmcat]').forEach(btn => {
+    btn.onclick = () => {
+      const target = btn.dataset.pmact === 'on';
+      Object.entries(LAYERS).filter(([_,l]) => l.cat === btn.dataset.pmcat).forEach(([key, l]) => {
+        if (l.on !== target) {
+          const mainEl = document.querySelector(`#cnt-${key}`)?.parentElement;
+          toggleLayer(key, mainEl || document.createElement('div'));
+        }
+      });
+      renderProjMaps(body); // re-render damit alle off/on-States stimmen
+    };
+  });
+  // Globale Knöpfe
+  document.getElementById('projMapsAllOn').onclick = () => {
+    Object.entries(LAYERS).forEach(([key, l]) => {
+      if (!l.on) {
+        const mainEl = document.querySelector(`#cnt-${key}`)?.parentElement;
+        toggleLayer(key, mainEl || document.createElement('div'));
+      }
+    });
+    renderProjMaps(body);
+  };
+  document.getElementById('projMapsAllOff').onclick = () => {
+    Object.entries(LAYERS).forEach(([key, l]) => {
+      if (l.on) {
+        const mainEl = document.querySelector(`#cnt-${key}`)?.parentElement;
+        toggleLayer(key, mainEl || document.createElement('div'));
+      }
+    });
+    renderProjMaps(body);
+  };
+  document.getElementById('projMapsReset').onclick = () => {
+    // Setzt auf URL-default zurück: nutze die initialen `on`-Werte aus der LAYERS-Definition
+    // Da diese aber schon mutiert wurden, behelfen wir uns mit den "klassischen" Default-Layern
+    const defaultOn = new Set(['conflict','battle','protest','action','pipeOil','pipeGas','nuclear','routes','choke','ports','sanctions','pins','userNotes']);
+    Object.entries(LAYERS).forEach(([key, l]) => {
+      const want = defaultOn.has(key);
+      if (l.on !== want) {
+        const mainEl = document.querySelector(`#cnt-${key}`)?.parentElement;
+        toggleLayer(key, mainEl || document.createElement('div'));
+      }
+    });
+    renderProjMaps(body);
+  };
 }
 
 function renderProjOverview(body) {

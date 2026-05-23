@@ -20,7 +20,7 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
 body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:13px;overflow:hidden}
-#app{display:grid;grid-template-columns:340px 1fr;height:100vh}
+#app{display:grid;grid-template-columns:270px 1fr;height:100vh}
 
 /* ════ SIDEBAR ════ */
 #sidebar{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
@@ -70,6 +70,22 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-siz
 .swatch.dash{background:repeating-linear-gradient(90deg,currentColor 0 4px,transparent 4px 7px)}
 .layer-toggle .name{flex:1;font-size:12px}
 .layer-toggle .cnt{color:var(--ink-faint);font-size:10px;min-width:22px;text-align:right}
+.layer-toggle .expand{color:var(--ink-faint);font-size:10px;padding:2px 4px;border-radius:3px;
+  cursor:pointer;transition:transform .15s,background .15s;display:inline-block;flex:0 0 auto}
+.layer-toggle .expand:hover{background:var(--panel-3);color:var(--accent)}
+.layer-toggle.expanded .expand{transform:rotate(90deg);color:var(--accent)}
+.layer-countries{display:none;margin:2px 0 6px 24px;padding:6px 8px;background:var(--panel-2);
+  border:1px solid var(--line);border-radius:6px;max-height:240px;overflow-y:auto}
+.layer-toggle-wrap.expanded .layer-countries{display:block}
+.layer-countries::-webkit-scrollbar{width:5px}
+.layer-countries::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:3px}
+.lc-item{display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:4px;cursor:pointer;
+  font-size:11px;color:var(--ink-dim);transition:all .12s}
+.lc-item:hover{background:var(--panel-3);color:var(--ink)}
+.lc-item .lc-flag{font-size:13px;line-height:1}
+.lc-item .lc-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lc-item .lc-cnt{color:var(--ink-faint);font-size:9.5px}
+.lc-empty{padding:6px 8px;color:var(--ink-faint);font-size:10.5px;font-style:italic}
 
 .basemap-row{display:flex;gap:6px;margin-bottom:4px}
 .basemap-btn{flex:1;text-align:center;padding:7px 0;border:1px solid var(--line);border-radius:7px;
@@ -413,6 +429,8 @@ select.tb-btn{appearance:none;padding-right:24px;background-image:linear-gradien
   width:min(90vw,500px);max-height:85vh;display:flex;flex-direction:column;
   box-shadow:0 30px 80px rgba(0,0,0,.6)}
 .modal-box.modal-wide{width:min(95vw,840px)}
+/* Land-Dossier: 3x breiter als der Default-Modal, damit alles auf einem Blick passt */
+.modal-box.dossier-box{width:min(96vw,1500px);max-width:96vw;max-height:94vh}
 .modal-head{padding:16px 22px;border-bottom:1px solid var(--line);display:flex;
   justify-content:space-between;align-items:center;gap:10px}
 .modal-head h2{font-family:var(--font-display);font-size:16px;font-weight:600}
