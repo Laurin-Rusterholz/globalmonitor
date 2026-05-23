@@ -48,18 +48,77 @@ const bases = {
 };
 let activeBase = bases.dark.addTo(map);
 let activeBaseKey = 'dark';
-document.querySelectorAll('.basemap-btn').forEach(b => {
-  b.onclick = () => {
-    document.querySelectorAll('.basemap-btn').forEach(x => x.classList.remove('active'));
-    b.classList.add('active');
-    map.removeLayer(activeBase);
-    activeBaseKey = b.dataset.base;
-    activeBase = bases[activeBaseKey].addTo(map);
-    activeBase.bringToBack && activeBase.bringToBack();
-    // Date-Picker nur für NASA-Layer einblenden
-    document.getElementById('satDateRow').style.display = (activeBaseKey === 'nasa') ? 'flex' : 'none';
-  };
-});
+
+// Layer-Factories für datierbare Sat-Quellen
+function buildNasaLayer(date) {
+  return L.tileLayer(
+    `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
+    { attribution: '© NASA GIBS / VIIRS · ' + date, maxZoom: 9, tileSize: 256 }
+  );
+}
+
+let sentinelConfig = null; // { instanceId, endpoint }
+function buildSentinelLayer(layer, date) {
+  if (!sentinelConfig) return null;
+  const dateStr = date || gibsDate(1);
+  const start = dateStr + 'T00:00:00Z';
+  const end = dateStr + 'T23:59:59Z';
+  return L.tileLayer.wms(`${sentinelConfig.endpoint}/${sentinelConfig.instanceId}`, {
+    layers: layer,
+    format: 'image/jpeg',
+    transparent: false,
+    attribution: `© ESA Sentinel-2 · ${dateStr}`,
+    maxZoom: 18,
+    tileSize: 512,
+    time: `${start}/${end}`,
+    maxcc: 30
+  });
+}
+
+async function loadSentinelConfig() {
+  if (!CONFIG.USE_BACKEND) return;
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/config`);
+    const c = await r.json();
+    if (c.sentinelInstanceId) {
+      sentinelConfig = { instanceId: c.sentinelInstanceId, endpoint: c.sentinelEndpoint };
+      // Basemap-Buttons hinzufügen
+      const row = document.querySelector('.basemap-row');
+      ['Sentinel-Echt|sentinel|TRUE_COLOR', 'Sentinel-Falsch|sentinelFalse|FALSE_COLOR'].forEach(spec => {
+        const [label, key, layer] = spec.split('|');
+        bases[key] = buildSentinelLayer(layer);
+        bases[key]._sentinelLayerName = layer;
+        const btn = document.createElement('div');
+        btn.className = 'basemap-btn';
+        btn.dataset.base = key;
+        btn.textContent = label;
+        btn.onclick = () => switchBase(key, btn);
+        row.appendChild(btn);
+      });
+      // Compare-Optionen freischalten
+      document.querySelectorAll('#cmpLayer option[disabled]').forEach(o => o.disabled = false);
+      console.log('Sentinel-Hub aktiviert');
+    } else {
+      console.log('Sentinel-Hub nicht konfiguriert (SENTINEL_INSTANCE_ID fehlt)');
+    }
+  } catch (e) { console.warn('Config:', e); }
+}
+
+function switchBase(key, btn) {
+  if (compareMode) toggleCompare(); // Compare beenden falls aktiv
+  document.querySelectorAll('.basemap-btn').forEach(x => x.classList.remove('active'));
+  btn.classList.add('active');
+  map.removeLayer(activeBase);
+  activeBaseKey = key;
+  // Bei Sentinel mit Datumswahl: Layer mit aktuellem Datum frisch bauen
+  if (key === 'sentinel') bases.sentinel = buildSentinelLayer('TRUE_COLOR');
+  if (key === 'sentinelFalse') bases.sentinelFalse = buildSentinelLayer('FALSE_COLOR');
+  activeBase = bases[key].addTo(map);
+  activeBase.bringToBack && activeBase.bringToBack();
+  document.getElementById('satDateRow').style.display = (key === 'nasa') ? 'flex' : 'none';
+}
+// Bestehende Buttons auf switchBase umstellen
+document.querySelectorAll('.basemap-btn').forEach(b => { b.onclick = () => switchBase(b.dataset.base, b); });
 
 // NASA-Date-Picker initialisieren
 const satDateInput = document.getElementById('satDate');
@@ -71,17 +130,74 @@ if (satDateInput) {
     const d = satDateInput.value;
     if (!d) return;
     if (activeBaseKey === 'nasa') map.removeLayer(activeBase);
-    // Neue NASA-Tile-Layer mit gewähltem Datum
-    bases.nasa = L.tileLayer(
-      `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${d}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
-      { attribution: '© NASA GIBS / VIIRS · ' + d, maxZoom: 9, tileSize: 256 }
-    );
+    bases.nasa = buildNasaLayer(d);
     if (activeBaseKey === 'nasa') {
       activeBase = bases.nasa.addTo(map);
       activeBase.bringToBack && activeBase.bringToBack();
     }
   });
 }
+
+/* ════ COMPARE-MODUS (Side-by-Side) ════ */
+let compareMode = false;
+let compareControl = null;
+let cmpLeftLayer = null;
+let cmpRightLayer = null;
+
+function makeCompareLayer(kind, date) {
+  if (kind === 'nasa') return buildNasaLayer(date);
+  if (kind === 'sentinel') return buildSentinelLayer('TRUE_COLOR', date);
+  if (kind === 'sentinelFalse') return buildSentinelLayer('FALSE_COLOR', date);
+  return buildNasaLayer(date);
+}
+
+function rebuildCompareLayers() {
+  if (!compareMode) return;
+  const leftDate = document.getElementById('cmpLeftDate').value;
+  const rightDate = document.getElementById('cmpRightDate').value;
+  const kind = document.getElementById('cmpLayer').value;
+  if (cmpLeftLayer) map.removeLayer(cmpLeftLayer);
+  if (cmpRightLayer) map.removeLayer(cmpRightLayer);
+  cmpLeftLayer = makeCompareLayer(kind, leftDate);
+  cmpRightLayer = makeCompareLayer(kind, rightDate);
+  if (!cmpLeftLayer || !cmpRightLayer) return;
+  cmpLeftLayer.addTo(map);
+  cmpRightLayer.addTo(map);
+  if (compareControl) compareControl.remove();
+  compareControl = L.control.sideBySide(cmpLeftLayer, cmpRightLayer).addTo(map);
+}
+
+function toggleCompare() {
+  const bar = document.getElementById('compareBar');
+  const btn = document.getElementById('compareBtn');
+  if (!compareMode) {
+    // Vor-Konfigurieren: Standarddaten (vor 60 Tagen vs gestern)
+    document.getElementById('cmpLeftDate').value = gibsDate(60);
+    document.getElementById('cmpLeftDate').max = gibsDate(1);
+    document.getElementById('cmpRightDate').value = gibsDate(1);
+    document.getElementById('cmpRightDate').max = gibsDate(1);
+    map.removeLayer(activeBase); // aktuelle Basemap aus
+    compareMode = true;
+    rebuildCompareLayers();
+    bar.classList.add('show');
+    btn.classList.add('active');
+  } else {
+    if (compareControl) compareControl.remove();
+    if (cmpLeftLayer) map.removeLayer(cmpLeftLayer);
+    if (cmpRightLayer) map.removeLayer(cmpRightLayer);
+    cmpLeftLayer = cmpRightLayer = null;
+    activeBase = bases[activeBaseKey].addTo(map);
+    activeBase.bringToBack && activeBase.bringToBack();
+    compareMode = false;
+    bar.classList.remove('show');
+    btn.classList.remove('active');
+  }
+}
+
+document.getElementById('compareBtn').onclick = toggleCompare;
+['cmpLeftDate','cmpRightDate','cmpLayer'].forEach(id => {
+  document.getElementById(id).addEventListener('change', rebuildCompareLayers);
+});
 
 /* ════ LAYER DEFINITIONEN ════
    Kategorien: events, energy, maritime, military, infra, economy, environment, air
@@ -1007,6 +1123,7 @@ renderStatic();
 buildLegend();
 loadConflicts();
 conflictTimer = setInterval(loadConflicts, CONFIG.CONFLICT_REFRESH_MS);
+loadSentinelConfig();
 
 // OSINT-Feed im Hintergrund laden (für KI-Kontext)
 if (CONFIG.USE_BACKEND) {

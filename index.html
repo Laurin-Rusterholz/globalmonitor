@@ -45,7 +45,23 @@
       <button class="tb-btn" id="planeBtn">✈ Flüge</button>
       <button class="tb-btn" id="shipBtn">⚓ Schiffe</button>
       <button class="tb-btn" id="osintBtn">📰 OSINT</button>
+      <button class="tb-btn" id="compareBtn">⇆ Vergleich</button>
       <button class="tb-btn" id="legendBtn">☰ Legende</button>
+    </div>
+    <div id="compareBar">
+      <div class="cmp-col">
+        <label>Links</label>
+        <input type="date" id="cmpLeftDate">
+      </div>
+      <select id="cmpLayer">
+        <option value="nasa">NASA VIIRS</option>
+        <option value="sentinel" disabled>Sentinel-2 Echtfarbe</option>
+        <option value="sentinelFalse" disabled>Sentinel-2 Falschfarbe</option>
+      </select>
+      <div class="cmp-col">
+        <label>Rechts</label>
+        <input type="date" id="cmpRightDate">
+      </div>
     </div>
     <div id="clock"><b id="utcTime">--:--</b> UTC · <span id="evtTotal">0</span> Ereignisse</div>
     <div id="legend"></div>
@@ -99,6 +115,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-side-by-side@2.2.0/leaflet-side-by-side.js"></script>
 <script src="assets/data/reference.js"></script>
 <script src="assets/js/app.js"></script>
 </body>
