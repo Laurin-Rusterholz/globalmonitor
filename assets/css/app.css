@@ -202,6 +202,22 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-siz
 .osint-sum{font-size:11px;color:var(--ink-dim);line-height:1.5;margin-bottom:4px}
 .osint-date{font-size:9.5px;color:var(--ink-faint)}
 
+/* ════ COMPARE BAR ════ */
+#compareBar{position:absolute;top:60px;left:50%;transform:translateX(-50%);z-index:999;
+  background:rgba(15,20,29,.93);backdrop-filter:blur(10px);border:1px solid var(--line-2);
+  border-radius:10px;padding:8px 14px;display:none;align-items:center;gap:14px;
+  box-shadow:0 10px 36px rgba(0,0,0,.5)}
+#compareBar.show{display:flex}
+#compareBar .cmp-col{display:flex;flex-direction:column;gap:3px}
+#compareBar label{font-size:9.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.1em}
+#compareBar input,#compareBar select{background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:5px;padding:4px 7px;font-family:inherit;font-size:11px}
+#compareBar input:focus,#compareBar select:focus{outline:none;border-color:var(--accent)}
+#compareBar select{height:28px;align-self:flex-end}
+
+.leaflet-sbs-divider{background:var(--accent);width:3px;opacity:.85}
+.leaflet-sbs-range{background:var(--panel);border:2px solid var(--accent);box-shadow:0 0 12px rgba(33,199,214,.5)}
+
 /* ════ SAT DATE PICKER ════ */
 .sat-date-row{padding:6px 0 4px;font-size:10px;color:var(--ink-dim);display:flex;flex-direction:column;gap:4px}
 .sat-date-row input{background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
