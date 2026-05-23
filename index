@@ -207,7 +207,7 @@
    ════════════════════════════════════════════════════════════════ */
 
 const CONFIG = {
-  USE_BACKEND: false,
+  USE_BACKEND: true,
   BACKEND_BASE: '/.netlify/functions'
 };
 
