@@ -4,6 +4,6 @@
   "private": true,
   "description": "Geopolitisches Lagebild",
   "dependencies": {
-    "@netlify/blobs": "^7.4.0"
+    "@netlify/blobs": "^10.7.8"
   }
 }

@@ -19,3 +19,15 @@
 
 [functions.conflicts]
   timeout = 15
+
+[functions.projectanalyze]
+  timeout = 26
+
+[functions.getjob]
+  timeout = 10
+
+[functions.projects]
+  timeout = 10
+
+[functions.notes]
+  timeout = 10

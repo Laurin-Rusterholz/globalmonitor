@@ -1,10 +1,28 @@
 // Netlify-Blobs-basierter Notiz-Speicher pro Land
 // Storage-Struktur: Store "country-notes", Keys "ISO/timestamp_id"
 
-const { getStore } = require('@netlify/blobs');
+let blobsModule, blobsImportError;
+try { blobsModule = require('@netlify/blobs'); }
+catch (e) {
+  blobsImportError = e.message;
+  console.error('@netlify/blobs nicht verfügbar:', e.message);
+}
 
 function getNotesStore() {
-  return getStore({ name: 'country-notes', consistency: 'strong' });
+  if (!blobsModule) throw new Error('Netlify Blobs Package nicht installiert: ' + (blobsImportError||'?'));
+  const siteID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID;
+  const token = process.env.NETLIFY_API_TOKEN || process.env.NETLIFY_BLOBS_TOKEN;
+  try {
+    if (siteID && token) {
+      return blobsModule.getStore({ name: 'country-notes', consistency: 'strong', siteID, token });
+    }
+    return blobsModule.getStore({ name: 'country-notes', consistency: 'strong' });
+  } catch (e) {
+    if (siteID && token) {
+      return blobsModule.getStore({ name: 'country-notes', consistency: 'strong', siteID, token });
+    }
+    throw e;
+  }
 }
 
 function json(obj, status = 200) {
@@ -16,10 +34,17 @@ function json(obj, status = 200) {
 }
 
 exports.handler = async (event) => {
+  const method = event.httpMethod;
+  const qs = event.queryStringParameters || {};
+  let store;
+  try { store = getNotesStore(); }
+  catch (storeErr) {
+    console.warn('Notes store init fail:', storeErr.message);
+    // GET → leere Liste, damit Client localStorage-Fallback nutzt
+    if (method === 'GET') return json({ notes: [], blobsUnavailable: true, hint: storeErr.message });
+    return json({ error: storeErr.message, blobsUnavailable: true }, 500);
+  }
   try {
-    const store = getNotesStore();
-    const method = event.httpMethod;
-    const qs = event.queryStringParameters || {};
 
     if (method === 'GET') {
       const iso = (qs.iso || '').toUpperCase();

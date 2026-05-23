@@ -1,14 +1,23 @@
 // Polling-Endpoint für Background-Job-Ergebnisse aus Blob-Store 'ai-jobs'
 
-let blobsModule;
+let blobsModule, blobsImportError;
 try { blobsModule = require('@netlify/blobs'); }
-catch (e) { console.error('@netlify/blobs nicht verfügbar:', e.message); }
+catch (e) {
+  blobsImportError = e.message;
+  console.error('@netlify/blobs nicht verfügbar:', e.message);
+}
 
 function getStoreSafe(name) {
+  if (!blobsModule) throw new Error('Blobs Package nicht installiert: ' + (blobsImportError||'?'));
   const siteID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID;
   const token = process.env.NETLIFY_API_TOKEN || process.env.NETLIFY_BLOBS_TOKEN;
-  if (siteID && token) return blobsModule.getStore({ name, siteID, token });
-  return blobsModule.getStore(name);
+  try {
+    if (siteID && token) return blobsModule.getStore({ name, siteID, token });
+    return blobsModule.getStore(name);
+  } catch (e) {
+    if (siteID && token) return blobsModule.getStore({ name, siteID, token });
+    throw e;
+  }
 }
 
 exports.handler = async (event) => {

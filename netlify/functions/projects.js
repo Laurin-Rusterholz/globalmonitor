@@ -51,7 +51,7 @@ exports.handler = async (event) => {
       } catch (e) {
         // Leerer/neuer Store kann list() fail werfen
         console.warn('store.list fail:', e.message);
-        return json({ projects: [] });
+        return json({ projects: [], blobsUnavailable: true, hint: e.message });
       }
       const projects = await Promise.all(
         blobs.map(async (b) => {
@@ -127,8 +127,20 @@ exports.handler = async (event) => {
     return json({ error: 'method not allowed' }, 405);
   } catch (e) {
     console.error('projects fn:', e);
+    const method = event.httpMethod;
+    // Für GET: lieber 200 mit leerer Liste + Hinweis, damit Client localStorage-Fallback nutzt
+    // ohne Console-500-Spam
+    if (method === 'GET') {
+      return json({
+        projects: [],
+        blobsUnavailable: true,
+        error: e.message,
+        hint: 'Netlify Blobs nicht verfügbar - Frontend nutzt localStorage als Fallback'
+      });
+    }
     return json({
       error: e.message,
+      blobsUnavailable: true,
       hint: 'Falls Netlify Blobs nicht funktioniert: Frontend nutzt localStorage als Fallback',
       stack: (e.stack||'').split('\n').slice(0, 5).join(' | ')
     }, 500);
