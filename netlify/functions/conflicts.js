@@ -8,6 +8,11 @@ const QUERIES = [
 ];
 
 const ALLOWED_TIMESPANS = ['1h','6h','12h','1d','3d','7d','1m'];
+// GDELT erfordert "Vollwort"-Format (1hours statt 1h, 1day statt 1d)
+const GDELT_TIMESPAN = {
+  '1h':'1hours','6h':'6hours','12h':'12hours',
+  '1d':'24hours','3d':'72hours','7d':'1week','1m':'1month'
+};
 const cacheByWindow = {};
 
 exports.handler = async (event) => {
@@ -29,10 +34,11 @@ exports.handler = async (event) => {
   const errors = [];
   await Promise.all(QUERIES.map(async item => {
     try {
-      // GDELT GEO API erfordert mode=PointData und format=GeoJSON (Großschreibung)
+      // GDELT GEO API erfordert mode=PointData und timespan im Vollwort-Format
+      const gdeltTs = GDELT_TIMESPAN[timespan] || '72hours';
       const params = mode === 'range'
         ? `&mode=PointData&format=GeoJSON&startdatetime=${startdt}&enddatetime=${enddt}&maxpoints=200`
-        : `&mode=PointData&format=GeoJSON&timespan=${timespan}&maxpoints=200`;
+        : `&mode=PointData&format=GeoJSON&timespan=${gdeltTs}&maxpoints=200`;
       const url = 'https://api.gdeltproject.org/api/v2/geo/geo?query=' +
         encodeURIComponent(item.q) + params;
       const ctrl = new AbortController();

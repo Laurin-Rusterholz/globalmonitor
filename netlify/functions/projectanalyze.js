@@ -34,41 +34,61 @@ ${baseCountries.length ? `Basis-Länder vom Nutzer vorgewählt: ${baseCountries.
 
 Liefere das strukturierte JSON.`;
 
-    // Haiku ist 3-4x schneller als Sonnet - wichtig für 10s-Netlify-Timeout
-    const reqBody = {
-      model: webSearch ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001',
-      max_tokens: 1500,
-      system: sys,
-      messages: [{ role: 'user', content: userMsg }],
-    };
-    if (webSearch) {
-      reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }];
+    async function callModel(modelName, maxTokens, timeoutMs) {
+      const reqBody = { model: modelName, max_tokens: maxTokens, system: sys, messages: [{ role: 'user', content: userMsg }] };
+      if (webSearch) reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }];
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify(reqBody), signal: ctrl.signal
+        });
+        if (!res.ok) {
+          const t = await res.text().catch(()=>'');
+          throw new Error(`API ${res.status}: ${t.slice(0,150)}`);
+        }
+        return await res.json();
+      } finally { clearTimeout(t); }
     }
 
-    const ctrl = new AbortController();
-    const timeoutId = setTimeout(() => ctrl.abort(), 9000);
-    let res;
+    let data, modelUsed;
+    // Erst Haiku (schnell), wenn Parse-Fail dann Sonnet
     try {
-      res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify(reqBody),
-        signal: ctrl.signal
-      });
-    } finally { clearTimeout(timeoutId); }
-    const data = await res.json();
+      data = await callModel(webSearch ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001', 1500, 9000);
+      modelUsed = webSearch ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001';
+    } catch (e) {
+      console.warn('Erst-Call fehlgeschlagen, versuche Sonnet:', e.message);
+      data = await callModel('claude-sonnet-4-6', 1500, 9000);
+      modelUsed = 'claude-sonnet-4-6';
+    }
+
     const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    if (!text) return json({ error: 'Leere KI-Antwort', rawData: data }, 500);
     const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return json({ error: 'kein JSON in Antwort', raw: text }, 500);
+    if (!m) return json({ error: 'Kein JSON-Block in Antwort', raw: text.slice(0,500) }, 500);
     let parsed;
     try { parsed = JSON.parse(m[0]); }
-    catch (e) { return json({ error: 'JSON-Parse-Fehler', raw: text }, 500); }
+    catch (e) {
+      // Retry mit Sonnet wenn Haiku schlechtes JSON
+      if (modelUsed !== 'claude-sonnet-4-6') {
+        console.warn('Haiku JSON kaputt, retry mit Sonnet');
+        try {
+          const data2 = await callModel('claude-sonnet-4-6', 1500, 9000);
+          const text2 = (data2.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+          const m2 = text2.match(/\{[\s\S]*\}/);
+          parsed = JSON.parse(m2[0]);
+          modelUsed = 'claude-sonnet-4-6';
+        } catch (e2) {
+          return json({ error: 'JSON-Parse fehlgeschlagen (beide Modelle)', raw: text.slice(0,500) }, 500);
+        }
+      } else {
+        return json({ error: 'JSON-Parse-Fehler', raw: text.slice(0,500) }, 500);
+      }
+    }
     parsed.generated = new Date().toISOString();
-    parsed.model = 'claude-sonnet-4-6';
+    parsed.model = modelUsed;
     parsed.webSearchUsed = !!webSearch;
     return json(parsed);
   } catch (e) {
