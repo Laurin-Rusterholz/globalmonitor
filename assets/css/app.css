@@ -479,6 +479,76 @@ select.tb-btn{appearance:none;padding-right:24px;background-image:linear-gradien
 .popup-source a{color:var(--ink-dim);text-decoration:none}
 .popup-source a:hover{color:var(--accent)}
 
+/* ════ PROJEKT-PANEL (Recherche-Projekt aktiv) ════ */
+#projectPanel{position:absolute;top:0;right:0;height:100vh;width:520px;background:var(--panel);
+  border-left:2px solid var(--protest);z-index:1195;transform:translateX(100%);
+  transition:transform .28s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;
+  box-shadow:-20px 0 50px rgba(0,0,0,.65)}
+#projectPanel.open{transform:translateX(0)}
+#projectPanel .osint-head::after{background:radial-gradient(circle,rgba(255,200,61,.22),transparent 70%)}
+.project-tabs{display:flex;padding:0 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+.project-tab{background:none;border:none;color:var(--ink-dim);padding:10px 14px;cursor:pointer;
+  font-family:inherit;font-size:11.5px;border-bottom:2px solid transparent;white-space:nowrap}
+.project-tab:hover{color:var(--ink)}
+.project-tab.active{color:var(--protest);border-bottom-color:var(--protest)}
+.project-body{flex:1;overflow-y:auto;padding:14px 16px}
+.project-body::-webkit-scrollbar{width:7px}
+.project-body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:4px}
+
+.proj-thesis{background:var(--panel-2);border-left:3px solid var(--protest);padding:10px 13px;
+  border-radius:0 6px 6px 0;font-size:12px;line-height:1.6;color:var(--ink);margin-bottom:14px}
+.proj-section{margin-bottom:16px}
+.proj-section h4{font-family:var(--font-display);font-size:12px;color:var(--protest);
+  text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px;display:flex;align-items:center;
+  justify-content:space-between;gap:8px}
+.proj-section h4 button{background:var(--panel-3);border:1px solid var(--line);color:var(--ink-dim);
+  border-radius:5px;padding:3px 8px;cursor:pointer;font-family:inherit;font-size:10px}
+
+.proj-country-list{display:flex;flex-direction:column;gap:6px}
+.proj-country{background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:9px 12px;
+  cursor:pointer;transition:border-color .15s,background .15s}
+.proj-country:hover{border-color:var(--protest);background:var(--panel-3)}
+.proj-country-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:3px}
+.proj-country-name{font-family:var(--font-display);font-size:12.5px;color:var(--ink);display:flex;align-items:center;gap:7px}
+.proj-country-role{font-size:9px;text-transform:uppercase;letter-spacing:.1em;padding:2px 7px;border-radius:3px;font-weight:600}
+.proj-country-role.role-primary{background:rgba(255,77,61,.2);color:var(--conflict)}
+.proj-country-role.role-secondary{background:rgba(255,120,71,.2);color:var(--battle)}
+.proj-country-role.role-target{background:rgba(255,93,162,.2);color:#ff5da2}
+.proj-country-role.role-beneficiary{background:rgba(62,207,142,.2);color:var(--choke)}
+.proj-country-role.role-loser{background:rgba(199,125,255,.2);color:var(--pipeline-oil)}
+.proj-country-role.role-bystander{background:var(--line-2);color:var(--ink-dim)}
+.proj-country-reason{font-size:10.5px;color:var(--ink-dim);line-height:1.5}
+.proj-country-actions{display:flex;gap:5px;margin-top:5px}
+.proj-country-actions button{background:none;border:1px solid var(--line);color:var(--ink-dim);
+  border-radius:4px;padding:3px 7px;cursor:pointer;font-family:inherit;font-size:10px}
+.proj-country-actions button:hover{color:var(--protest);border-color:var(--protest)}
+
+.proj-actor-list{display:flex;flex-wrap:wrap;gap:6px}
+.proj-actor{background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:7px 10px;font-size:11px}
+.proj-actor b{color:var(--protest);font-family:var(--font-display);font-weight:normal;display:block;margin-bottom:2px}
+.proj-actor span{color:var(--ink-dim);font-size:10.5px}
+
+.proj-note-item{background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:9px 11px;margin-bottom:7px}
+.proj-note-head{display:flex;justify-content:space-between;gap:8px;margin-bottom:4px}
+.proj-note-head .flag{font-size:14px}
+.proj-note-title{font-family:var(--font-display);font-size:12.5px;color:var(--ink)}
+.proj-note-content{font-size:11px;color:var(--ink-dim);line-height:1.5;white-space:pre-wrap}
+.proj-note-meta{font-size:9.5px;color:var(--ink-faint);margin-top:5px;letter-spacing:.04em}
+
+/* Projekt-Highlight auf Karte (gelb/orange) */
+.proj-highlight-primary{stroke:#ff4d3d;stroke-width:4;fill:#ff4d3d;fill-opacity:0.4}
+.proj-highlight-secondary{stroke:#ff7847;stroke-width:3;fill:#ff7847;fill-opacity:0.35}
+.proj-highlight-target{stroke:#ff5da2;stroke-width:3;fill:#ff5da2;fill-opacity:0.35}
+.proj-highlight-beneficiary{stroke:#3ecf8e;stroke-width:3;fill:#3ecf8e;fill-opacity:0.3}
+.proj-highlight-loser{stroke:#c77dff;stroke-width:3;fill:#c77dff;fill-opacity:0.3}
+.proj-highlight-bystander{stroke:#566375;stroke-width:2;fill:#566375;fill-opacity:0.2}
+
+.proj-status-banner{position:absolute;top:60px;left:50%;transform:translateX(-50%);z-index:998;
+  background:var(--protest);color:#000;padding:8px 18px;border-radius:20px;font-size:11.5px;
+  display:none;align-items:center;gap:10px;box-shadow:0 8px 24px rgba(0,0,0,.4);font-weight:600}
+.proj-status-banner.show{display:flex}
+.proj-status-banner button{background:#000;color:var(--protest);border:none;border-radius:14px;padding:4px 10px;cursor:pointer;font-family:inherit;font-size:10px;font-weight:600}
+
 /* ════ RESEARCH-MANAGER PANEL ════ */
 #researchPanel{position:absolute;top:0;right:0;height:100vh;width:480px;background:var(--panel);
   border-left:1px solid var(--line-2);z-index:1190;transform:translateX(100%);

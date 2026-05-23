@@ -62,8 +62,8 @@ function syncUrl() {
 /* ════════════════════════════════════════════════════════════════
    PANEL-MANAGER (Mutual Exclusion)
    ════════════════════════════════════════════════════════════════ */
-const SIDE_PANELS = ['ai', 'osint', 'briefing', 'comparePanel', 'pinPanel', 'researchPanel'];
-const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal'];
+const SIDE_PANELS = ['ai', 'osint', 'briefing', 'comparePanel', 'pinPanel', 'researchPanel', 'projectPanel'];
+const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal', 'newProjectModal', 'projectNoteModal'];
 
 function openSidePanel(id) {
   SIDE_PANELS.forEach(p => {
@@ -3368,19 +3368,26 @@ document.getElementById('cmpClearAll')?.addEventListener('click', () => {
 document.getElementById('cmpOpenBtn')?.addEventListener('click', openComparePanel);
 
 async function refreshCompareDataIfStale() {
-  // Lade fehlende Daten nach (z.B. nach Reload)
-  for (const c of comparedCountries) {
+  // Parallelisiert für Geschwindigkeit
+  await Promise.all(comparedCountries.map(async c => {
     if (!c.live) c.live = await fetchWikidata(c.iso);
     if (!c.economic) c.economic = await fetchEconomic(c.iso);
     if (!c.profile) c.profile = window.getCountryProfile?.(c.iso);
-  }
+  }));
 }
 
 async function openComparePanel() {
   openSidePanel('comparePanel');
   document.getElementById('cmpPanelSub').textContent = `${comparedCountries.length} Länder`;
+  const body = document.getElementById('comparePanelBody');
+  body.innerHTML = `<div style="padding:40px;text-align:center;color:var(--ink-dim)">
+    <div style="font-size:24px;margin-bottom:10px">⏳</div>
+    Lade Länderdaten für ${comparedCountries.length} Länder…
+  </div>`;
   await refreshCompareDataIfStale();
   renderComparePanel();
+  // Scroll Body nach oben für frische Sicht
+  body.scrollTop = 0;
 }
 document.getElementById('closeComparePanel')?.addEventListener('click', () => {
   document.getElementById('comparePanel').classList.remove('open');
@@ -3388,6 +3395,11 @@ document.getElementById('closeComparePanel')?.addEventListener('click', () => {
 
 function renderComparePanel() {
   const body = document.getElementById('comparePanelBody');
+  if (!body) return;
+  if (!comparedCountries.length) {
+    body.innerHTML = '<div style="padding:40px;text-align:center;color:var(--ink-dim)">Keine Länder im Vergleich</div>';
+    return;
+  }
   const cols = Math.min(comparedCountries.length, 4);
 
   // Cards-Bereich
@@ -3519,6 +3531,464 @@ document.getElementById('webSearchToggle')?.addEventListener('click', (e) => {
   e.currentTarget.classList.toggle('active', window._webSearchPersistent);
   toast(window._webSearchPersistent ? '🔍 Online-Recherche dauerhaft aktiv' : 'Online-Recherche aus');
 });
+
+/* ════════════════════════════════════════════════════════════════
+   RECHERCHE-PROJEKTE
+   ════════════════════════════════════════════════════════════════ */
+let activeProject = null;       // aktuell geladenes Projekt-Objekt
+let projectHighlights = new Map(); // iso -> layer (für proj-Highlight, separat vom multi-select)
+
+document.getElementById('newProjectBtn')?.addEventListener('click', () => openNewProjectModal());
+
+function openNewProjectModal(presetThesis = '', presetCountries = []) {
+  document.getElementById('newProjName').value = '';
+  document.getElementById('newProjThesis').value = presetThesis;
+  document.getElementById('newProjCountries').value = presetCountries.join(', ');
+  openModal('newProjectModal');
+  setTimeout(() => document.getElementById('newProjName').focus(), 100);
+}
+
+document.getElementById('newProjCreate')?.addEventListener('click', async () => {
+  const name = document.getElementById('newProjName').value.trim();
+  const thesis = document.getElementById('newProjThesis').value.trim();
+  const countriesRaw = document.getElementById('newProjCountries').value.trim();
+  if (!name) return toast('Projektname erforderlich');
+  if (!thesis) return toast('These erforderlich');
+  const countries = countriesRaw ? countriesRaw.split(/[,;\s]+/).filter(Boolean).map(c => c.toUpperCase()) : [];
+
+  const btn = document.getElementById('newProjCreate');
+  btn.disabled = true; btn.textContent = '… erstelle Projekt';
+
+  try {
+    // Projekt anlegen
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/projects`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ name, thesis, countries })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const project = await res.json();
+    document.getElementById('newProjectModal').classList.remove('open');
+    toast('Projekt erstellt - starte KI-Analyse');
+    await loadProject(project.id);
+    // KI-Analyse anstoßen
+    runProjectAnalysis();
+  } catch (e) {
+    toast('Fehler: ' + e.message);
+  }
+  btn.disabled = false; btn.textContent = '🚀 Projekt erstellen & KI-Analyse starten';
+});
+
+async function loadProject(id) {
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/projects?id=${encodeURIComponent(id)}`);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    activeProject = await r.json();
+    openProjectPanel();
+    if (activeProject.view) {
+      try { map.setView(activeProject.view.center, activeProject.view.zoom); } catch {}
+    }
+    applyProjectHighlights();
+  } catch (e) { toast('Projekt-Lade-Fehler: ' + e.message); }
+}
+
+async function saveProject(patch = {}) {
+  if (!activeProject) return;
+  Object.assign(activeProject, patch);
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/projects`, {
+      method: 'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(activeProject)
+    });
+    if (r.ok) activeProject = await r.json();
+  } catch (e) { console.warn('saveProject:', e); }
+}
+
+function openProjectPanel() {
+  if (!activeProject) return;
+  openSidePanel('projectPanel');
+  document.getElementById('projHeadName').textContent = activeProject.name;
+  document.getElementById('projHeadMeta').textContent = `${activeProject.countries.length} Länder · ${activeProject.countryNotes ? Object.values(activeProject.countryNotes).flat().length : 0} Notizen · ${activeProject.relatedCountries?.length || 0} Akteure (KI)`;
+  // Status-Banner anzeigen
+  document.getElementById('projStatusBanner').classList.add('show');
+  document.getElementById('projStatusName').textContent = activeProject.name;
+  // Erste Tab rendern
+  document.querySelectorAll('.project-tab').forEach(t => t.classList.toggle('active', t.dataset.ptab === 'overview'));
+  renderProjectTab('overview');
+}
+
+document.querySelectorAll('.project-tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.project-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    renderProjectTab(tab.dataset.ptab);
+  };
+});
+
+function renderProjectTab(tab) {
+  const body = document.getElementById('projectPanelBody');
+  if (!activeProject) { body.innerHTML = '<div class="conn-empty">Kein Projekt geladen</div>'; return; }
+  if (tab === 'overview') renderProjOverview(body);
+  else if (tab === 'countries') renderProjCountries(body);
+  else if (tab === 'notes') renderProjNotes(body);
+  else if (tab === 'chat') renderProjChat(body);
+}
+
+function renderProjOverview(body) {
+  const p = activeProject;
+  let html = `<div class="proj-thesis"><b style="color:var(--protest)">These:</b><br>${escapeHtml(p.thesis)}</div>`;
+
+  html += `<div class="proj-section">
+    <h4>🤖 KI-Analyse <button id="rerunAnalysis">${p.relatedCountries?.length?'↻ Aktualisieren':'⚡ Starten'}</button></h4>`;
+  if (p.summary) html += `<div class="proj-thesis" style="border-left-color:var(--accent)">${escapeHtml(p.summary)}</div>`;
+  if (p.thesisStrength) html += `<div style="font-size:11px;color:var(--ink-dim);margin-bottom:8px">Plausibilität der These: <b style="color:var(--accent)">${p.thesisStrength}</b></div>`;
+  if (p.contextHints?.length) {
+    html += `<div style="font-size:11px;margin-bottom:8px"><b style="color:var(--protest)">Kontext-Punkte:</b><ul style="margin:5px 0 0 18px;color:var(--ink-dim);line-height:1.6">${p.contextHints.map(h => '<li>'+escapeHtml(h)+'</li>').join('')}</ul></div>`;
+  }
+  if (p.openQuestions?.length) {
+    html += `<div style="font-size:11px;margin-bottom:8px"><b style="color:var(--protest)">Offene Fragen:</b><ul style="margin:5px 0 0 18px;color:var(--ink-dim);line-height:1.6">${p.openQuestions.map(h => '<li>'+escapeHtml(h)+'</li>').join('')}</ul></div>`;
+  }
+  html += `</div>`;
+
+  // Akteure
+  if (p.actors?.length) {
+    html += `<div class="proj-section"><h4>👥 Beteiligte Akteure</h4><div class="proj-actor-list">`;
+    p.actors.forEach(a => {
+      html += `<div class="proj-actor"><b>${escapeHtml(a.name)}</b><span>${escapeHtml(a.role||'')}</span><span style="display:block;color:var(--ink-faint);font-size:9.5px;margin-top:2px">${escapeHtml(a.type||'')} · ${escapeHtml(a.stake||'')}</span></div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  body.innerHTML = html;
+  document.getElementById('rerunAnalysis')?.addEventListener('click', () => runProjectAnalysis(true));
+}
+
+function renderProjCountries(body) {
+  const p = activeProject;
+  let html = `<div class="proj-section"><h4>🌍 Beteiligte Länder (${(p.relatedCountries||[]).length || p.countries.length}) <button id="addManualCountry">＋ Manuell</button></h4>`;
+  const list = (p.relatedCountries?.length ? p.relatedCountries : p.countries.map(iso => ({iso, role:'primary', reason:'manuell hinzugefügt'})));
+  if (!list.length) {
+    html += `<div class="conn-empty">Keine Länder. Starte KI-Analyse im Übersicht-Tab.</div>`;
+  } else {
+    html += `<div class="proj-country-list">`;
+    list.forEach(c => {
+      const name = window.getCountryProfile?.(c.iso)?.name || c.iso;
+      const role = c.role || 'primary';
+      const noteCount = (p.countryNotes?.[c.iso] || []).length;
+      html += `<div class="proj-country" data-iso="${c.iso}">
+        <div class="proj-country-head">
+          <div class="proj-country-name">${flagEmoji(c.iso)} ${escapeHtml(name)} ${noteCount?`<span style="font-size:10px;color:var(--ink-faint)">· ${noteCount} Notiz${noteCount>1?'en':''}</span>`:''}</div>
+          <div class="proj-country-role role-${role}">${role}</div>
+        </div>
+        ${c.reason ? `<div class="proj-country-reason">${escapeHtml(c.reason)}</div>` : ''}
+        <div class="proj-country-actions">
+          <button data-act="flyto" data-iso="${c.iso}">📍 Auf Karte</button>
+          <button data-act="note" data-iso="${c.iso}">✏ Notiz</button>
+          <button data-act="dossier" data-iso="${c.iso}">📋 Profil</button>
+          <button data-act="remove" data-iso="${c.iso}">✕</button>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  html += `</div>`;
+  body.innerHTML = html;
+
+  body.querySelectorAll('button[data-act]').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const iso = btn.dataset.iso;
+      const name = window.getCountryProfile?.(iso)?.name || iso;
+      if (btn.dataset.act === 'flyto') {
+        const c = R?.countryCenters?.[iso];
+        if (c) map.flyTo(c, 5, {duration: 0.8});
+        else toast('Keine Koordinaten für ' + iso);
+      }
+      else if (btn.dataset.act === 'note') openProjectNoteModal(iso, name);
+      else if (btn.dataset.act === 'dossier') window.openCountryDossier(iso, name);
+      else if (btn.dataset.act === 'remove') {
+        if (confirm(`${name} aus Projekt entfernen?`)) removeCountryFromProject(iso);
+      }
+    };
+  });
+  document.getElementById('addManualCountry')?.addEventListener('click', () => {
+    const isoRaw = prompt('Land ISO2-Code (z.B. DE)');
+    if (!isoRaw) return;
+    const iso = isoRaw.toUpperCase().trim();
+    addCountryToProject(iso, 'manual');
+  });
+}
+
+function renderProjNotes(body) {
+  const p = activeProject;
+  const allNotes = [];
+  Object.entries(p.countryNotes||{}).forEach(([iso, notes]) => {
+    notes.forEach(n => allNotes.push({...n, iso}));
+  });
+  allNotes.sort((a,b) => new Date(b.created) - new Date(a.created));
+
+  let html = `<div class="proj-section"><h4>📝 Alle Projekt-Notizen (${allNotes.length})</h4>`;
+  if (!allNotes.length) {
+    html += `<div class="conn-empty">Noch keine Notizen. Klicke im Länder-Tab auf "Notiz" um eine anzulegen.</div>`;
+  } else {
+    allNotes.forEach(n => {
+      const name = window.getCountryProfile?.(n.iso)?.name || n.iso;
+      html += `<div class="proj-note-item">
+        <div class="proj-note-head">
+          <div class="proj-note-title"><span class="flag">${flagEmoji(n.iso)}</span> ${escapeHtml(n.title)} <span style="font-size:10px;color:var(--ink-faint)">· ${escapeHtml(name)}</span></div>
+        </div>
+        <div class="proj-note-content">${escapeHtml(n.content)}</div>
+        <div class="proj-note-meta">${new Date(n.created).toLocaleString('de-CH')}</div>
+      </div>`;
+    });
+  }
+  html += `</div>`;
+  body.innerHTML = html;
+}
+
+function renderProjChat(body) {
+  body.innerHTML = `<div class="proj-section">
+    <h4>💬 Projekt-Chat (KI mit Projekt-Kontext)</h4>
+    <div id="projChatHistory" style="margin-bottom:12px;max-height:50vh;overflow-y:auto"></div>
+    <textarea id="projChatInput" rows="3" placeholder="Frage im Kontext dieses Projekts…" style="width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:8px 10px;font-family:inherit;font-size:12px;resize:vertical"></textarea>
+    <div style="display:flex;gap:7px;margin-top:8px">
+      <label style="font-size:11px;color:var(--ink-dim);display:flex;align-items:center;gap:5px"><input type="checkbox" id="projChatWebSearch"> 🔍 Online-Recherche</label>
+      <button class="tb-btn" id="projChatSend" style="margin-left:auto;background:var(--accent);color:#000">Senden</button>
+    </div>
+  </div>`;
+  renderProjChatHistory();
+  document.getElementById('projChatSend').onclick = sendProjectChat;
+}
+
+function renderProjChatHistory() {
+  const el = document.getElementById('projChatHistory');
+  if (!el || !activeProject) return;
+  const hist = activeProject.chatHistory || [];
+  if (!hist.length) { el.innerHTML = '<div class="conn-empty">Noch kein Chat. Stelle die erste Frage.</div>'; return; }
+  el.innerHTML = hist.map(m => {
+    if (m.role === 'user') return `<div style="color:var(--protest);margin-bottom:9px;line-height:1.5">› ${escapeHtml(m.content)}</div>`;
+    return `<div style="color:var(--ink);margin-bottom:14px;line-height:1.6;white-space:pre-wrap">${escapeHtml(m.content).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}</div>`;
+  }).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+async function sendProjectChat() {
+  if (!activeProject) return;
+  const input = document.getElementById('projChatInput');
+  const q = input.value.trim();
+  if (!q) return;
+  const useWeb = document.getElementById('projChatWebSearch').checked;
+  input.value = '';
+  activeProject.chatHistory = activeProject.chatHistory || [];
+  activeProject.chatHistory.push({role:'user', content:q});
+  renderProjChatHistory();
+  document.getElementById('projChatSend').disabled = true;
+
+  const ctx = JSON.stringify({
+    thesis: activeProject.thesis,
+    countries: (activeProject.relatedCountries||[]).slice(0,12),
+    actors: (activeProject.actors||[]).slice(0,10),
+  }, null, 2);
+  const sys = `Du bist Recherche-Assistent für ein geopolitisches Projekt. Bleibe im Kontext dieses Projekts.
+
+PROJEKT: "${activeProject.name}"
+${ctx}
+
+Antworte präzise, mit konkreten Akteuren, Daten, Zusammenhängen. Deutsch, max 350 Wörter.`;
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/ai`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({system:sys, messages:activeProject.chatHistory, webSearch: useWeb})
+    });
+    const data = await res.json();
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim() || '(keine Antwort)';
+    activeProject.chatHistory.push({role:'assistant', content:text});
+    renderProjChatHistory();
+    await saveProject();
+  } catch (e) { toast('Chat-Fehler: ' + e.message); }
+  document.getElementById('projChatSend').disabled = false;
+}
+
+async function runProjectAnalysis(forceWeb = false) {
+  if (!activeProject) return;
+  toast('KI analysiert These…');
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        thesis: activeProject.thesis,
+        baseCountries: activeProject.countries,
+        webSearch: forceWeb
+      })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    await saveProject({
+      relatedCountries: data.countries || [],
+      actors: data.actors || [],
+      summary: data.summary,
+      thesisStrength: data.thesisStrength,
+      contextHints: data.contextHints || [],
+      openQuestions: data.openQuestions || []
+    });
+    applyProjectHighlights();
+    renderProjectTab('overview');
+    toast('Analyse fertig: ' + (data.countries?.length||0) + ' Länder, ' + (data.actors?.length||0) + ' Akteure');
+  } catch (e) { toast('Analyse-Fehler: ' + e.message); }
+}
+
+function applyProjectHighlights() {
+  // Alte Highlights entfernen
+  projectHighlights.forEach((layer, iso) => {
+    try { layer.setStyle({weight: 0.6, color:'#0c1117', fillColor: countryColor(iso,'political'), fillOpacity:0.5}); } catch {}
+  });
+  projectHighlights.clear();
+  if (!activeProject || !politicalLayerInstance) return;
+  const isoToRole = {};
+  (activeProject.relatedCountries || []).forEach(c => isoToRole[c.iso] = c.role || 'primary');
+  activeProject.countries.forEach(iso => { if (!isoToRole[iso]) isoToRole[iso] = 'primary'; });
+
+  const roleColors = {
+    primary:    {color:'#ff4d3d', fill:'#ff4d3d', op:0.55, w:4},
+    secondary:  {color:'#ff7847', fill:'#ff7847', op:0.45, w:3},
+    target:     {color:'#ff5da2', fill:'#ff5da2', op:0.45, w:3},
+    beneficiary:{color:'#3ecf8e', fill:'#3ecf8e', op:0.4,  w:3},
+    loser:      {color:'#c77dff', fill:'#c77dff', op:0.4,  w:3},
+    bystander:  {color:'#7e8b9d', fill:'#7e8b9d', op:0.25, w:2}
+  };
+
+  politicalLayerInstance.eachLayer(l => {
+    const iso = getCountryIso(l.feature);
+    if (isoToRole[iso]) {
+      const r = roleColors[isoToRole[iso]] || roleColors.primary;
+      try {
+        l.setStyle({weight:r.w, color:r.color, fillColor:r.fill, fillOpacity:r.op});
+        l.bringToFront();
+      } catch {}
+      projectHighlights.set(iso, l);
+    }
+  });
+}
+
+function openProjectNoteModal(iso, name) {
+  document.getElementById('projectNoteTitle').textContent = `Notiz · ${name} (im Projekt "${activeProject.name}")`;
+  document.getElementById('projNoteTitle').value = '';
+  document.getElementById('projNoteContent').value = '';
+  document.getElementById('projectNoteModal').dataset.iso = iso;
+  openModal('projectNoteModal');
+}
+
+document.getElementById('projNoteSave')?.addEventListener('click', async () => {
+  if (!activeProject) return;
+  const iso = document.getElementById('projectNoteModal').dataset.iso;
+  const title = document.getElementById('projNoteTitle').value.trim() || 'Notiz';
+  const content = document.getElementById('projNoteContent').value.trim();
+  if (!content) return toast('Inhalt fehlt');
+
+  // Projekt-interne Notiz
+  activeProject.countryNotes = activeProject.countryNotes || {};
+  activeProject.countryNotes[iso] = activeProject.countryNotes[iso] || [];
+  const note = { title, content, created: new Date().toISOString(), projectId: activeProject.id, projectName: activeProject.name };
+  activeProject.countryNotes[iso].unshift(note);
+  await saveProject();
+
+  // Zusätzlich als reguläre Notiz speichern (auf Land), damit sie im Länderprofil sichtbar bleibt
+  await autoSaveAiOutput(iso, `[${activeProject.name}] ${title}`, content, 'manual', ['projekt:'+activeProject.name]);
+
+  document.getElementById('projectNoteModal').classList.remove('open');
+  toast('Notiz gespeichert');
+  if (document.querySelector('.project-tab.active')?.dataset.ptab === 'countries') renderProjectTab('countries');
+  if (document.querySelector('.project-tab.active')?.dataset.ptab === 'notes') renderProjectTab('notes');
+});
+
+async function addCountryToProject(iso, role = 'manual') {
+  if (!activeProject) return;
+  if (!activeProject.countries.includes(iso)) activeProject.countries.push(iso);
+  activeProject.relatedCountries = activeProject.relatedCountries || [];
+  if (!activeProject.relatedCountries.find(c => c.iso === iso)) {
+    activeProject.relatedCountries.push({iso, role, reason: 'manuell hinzugefügt'});
+  }
+  await saveProject();
+  applyProjectHighlights();
+  renderProjectTab('countries');
+}
+
+async function removeCountryFromProject(iso) {
+  if (!activeProject) return;
+  activeProject.countries = activeProject.countries.filter(c => c !== iso);
+  activeProject.relatedCountries = (activeProject.relatedCountries||[]).filter(c => c.iso !== iso);
+  await saveProject();
+  applyProjectHighlights();
+  renderProjectTab('countries');
+}
+
+document.getElementById('projSaveView')?.addEventListener('click', () => {
+  if (!activeProject) return;
+  saveProject({ view: { center: [map.getCenter().lat, map.getCenter().lng], zoom: map.getZoom() } });
+  toast('Kartensicht gespeichert');
+});
+
+document.getElementById('projDelete')?.addEventListener('click', async () => {
+  if (!activeProject) return;
+  if (!confirm(`Projekt "${activeProject.name}" löschen? (Notizen im Länderprofil bleiben erhalten)`)) return;
+  try {
+    await fetch(`${CONFIG.BACKEND_BASE}/projects?id=${encodeURIComponent(activeProject.id)}`, {method:'DELETE'});
+    toast('Projekt gelöscht');
+    closeProject();
+  } catch (e) { toast('Lösch-Fehler: ' + e.message); }
+});
+
+document.getElementById('closeProjectPanel')?.addEventListener('click', closeProject);
+document.getElementById('projStatusClose')?.addEventListener('click', closeProject);
+document.getElementById('projStatusOpen')?.addEventListener('click', () => {
+  if (activeProject) openProjectPanel();
+});
+
+function closeProject() {
+  // Highlights zurücksetzen
+  projectHighlights.forEach((layer, iso) => {
+    try { layer.setStyle({weight: 0.6, color:'#0c1117', fillColor: countryColor(iso,'political'), fillOpacity:0.5}); } catch {}
+  });
+  projectHighlights.clear();
+  activeProject = null;
+  document.getElementById('projectPanel').classList.remove('open');
+  document.getElementById('projStatusBanner').classList.remove('show');
+  toast('Projekt geschlossen - Notizen bleiben im Länderprofil');
+}
+
+// In Research-Manager auch Projekte listen
+async function loadAllProjects() {
+  if (!CONFIG.USE_BACKEND) return [];
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/projects`);
+    const d = await r.json();
+    return d.projects || [];
+  } catch { return []; }
+}
+
+// Erweitere Research-Manager mit Projekt-Sektion
+const originalLoadAllResearch = loadAllResearch;
+window.loadAllResearch = async function() {
+  await originalLoadAllResearch();
+  // Projekte oben einfügen
+  const projects = await loadAllProjects();
+  if (!projects.length) return;
+  const list = document.getElementById('researchList');
+  if (!list) return;
+  const projHtml = `<div style="padding:9px 16px;background:var(--panel-2);border-bottom:2px solid var(--protest);font-size:10px;color:var(--protest);letter-spacing:.1em;text-transform:uppercase">🔬 Recherche-Projekte (${projects.length})</div>` +
+    projects.map(p => `<div class="research-item" data-pid="${p.id}" style="border-left:3px solid var(--protest)">
+      <div class="research-item-head">
+        <div class="research-item-flag">🔬</div>
+        <div class="research-item-title">${escapeHtml(p.name)}</div>
+      </div>
+      <div class="research-item-meta"><span>Projekt</span><span>${(p.countries||[]).length} Länder</span><span>${new Date(p.updated).toLocaleString('de-CH',{dateStyle:'short',timeStyle:'short'})}</span></div>
+      <div class="research-item-preview">${escapeHtml(p.thesis || '').slice(0,200)}</div>
+    </div>`).join('');
+  list.insertAdjacentHTML('afterbegin', projHtml);
+  list.querySelectorAll('[data-pid]').forEach(el => {
+    el.onclick = () => { document.getElementById('researchPanel').classList.remove('open'); loadProject(el.dataset.pid); };
+  });
+};
 
 /* ════ START ════ */
 buildCategoryUI();

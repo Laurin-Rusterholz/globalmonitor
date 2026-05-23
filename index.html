@@ -57,6 +57,7 @@
       <button class="tb-btn" id="notifyBtn">🔔 Briefing-Alarm</button>
       <button class="tb-btn" id="sourcesBtn">ℹ Quellen</button>
       <button class="tb-btn" id="researchBtn">🗃 Recherche</button>
+      <button class="tb-btn" id="newProjectBtn" style="background:var(--accent);color:#000;border-color:var(--accent)">＋ Projekt</button>
       <select class="tb-btn" id="timeWindow" title="Zeitfenster für Konflikt-Live-Daten">
         <option value="1d">24h</option>
         <option value="3d" selected>3 Tage</option>
@@ -84,6 +85,11 @@
     </div>
     <div id="clock"><b id="utcTime">--:--</b> UTC · <span id="evtTotal">0</span> Ereignisse</div>
     <div id="legend"></div>
+    <div class="proj-status-banner" id="projStatusBanner">
+      <span>🔬 Recherche-Projekt aktiv: <b id="projStatusName">…</b></span>
+      <button id="projStatusOpen">Panel öffnen</button>
+      <button id="projStatusClose">× Beenden</button>
+    </div>
     <div class="measure-info" id="measureInfo">Klick zum Setzen, doppelklick zum Beenden. <b id="measureValue">0 km</b></div>
     <div class="toast" id="toast"></div>
     <div id="ctxMenu" class="ctx-menu">
@@ -216,6 +222,66 @@
       <button class="dossier-tab" data-tab="connections">🔗 Verbindungen</button>
     </div>
     <div class="dossier-body" id="cdBody"></div>
+  </div>
+</div>
+
+<!-- Recherche-Projekt: Erstellungs-Modal -->
+<div id="newProjectModal" class="modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2>Neues Recherche-Projekt</h2>
+      <button class="closeBtn" data-close="newProjectModal">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-info">Ein Projekt bündelt Länder, Ereignisse, Notizen und KI-Analysen zu einer These. Die KI schlägt automatisch beteiligte Akteure vor und hebt sie auf der Karte hervor.</p>
+      <label class="lbl-row">Projektname<input type="text" id="newProjName" placeholder="z.B. Sanktionen Russland 2025"></label>
+      <label class="lbl-row">These / Fragestellung<textarea id="newProjThesis" rows="5" placeholder="z.B. Welche Länder sind direkt und indirekt von den westlichen Sanktionen gegen Russland betroffen? Wer profitiert, wer verliert?"></textarea></label>
+      <label class="lbl-row">Länder (optional, ISO-Codes)<input type="text" id="newProjCountries" placeholder="DE, RU, CN, IN, HU"></label>
+      <div class="lbl-row" style="gap:8px">
+        <button class="tb-btn" id="newProjCreate" style="flex:1;background:var(--accent);color:#000">🚀 Projekt erstellen & KI-Analyse starten</button>
+        <button class="tb-btn" data-close="newProjectModal">Abbrechen</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Recherche-Projekt: Aktives Projekt Sidebar-Panel -->
+<div id="projectPanel">
+  <div class="osint-head">
+    <div style="flex:1;min-width:0">
+      <div class="region" id="projHeadName">Projekt</div>
+      <div class="coords" id="projHeadMeta">Lade…</div>
+    </div>
+    <div style="display:flex;gap:5px">
+      <button class="tb-btn" id="projSaveView" title="Aktuelle Kartensicht speichern">💾 Sicht</button>
+      <button class="tb-btn" id="projDelete" title="Projekt löschen">🗑</button>
+      <button class="closeBtn" id="closeProjectPanel">×</button>
+    </div>
+  </div>
+  <div class="project-tabs">
+    <button class="project-tab active" data-ptab="overview">📋 Übersicht</button>
+    <button class="project-tab" data-ptab="countries">🌍 Länder</button>
+    <button class="project-tab" data-ptab="notes">📝 Notizen</button>
+    <button class="project-tab" data-ptab="chat">💬 Chat</button>
+  </div>
+  <div class="project-body" id="projectPanelBody"></div>
+</div>
+
+<!-- Notiz zu Land im Projekt -->
+<div id="projectNoteModal" class="modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2 id="projectNoteTitle">Notiz zum Land im Projekt</h2>
+      <button class="closeBtn" data-close="projectNoteModal">×</button>
+    </div>
+    <div class="modal-body">
+      <label class="lbl-row">Titel<input type="text" id="projNoteTitle" placeholder="z.B. Beobachtung"></label>
+      <label class="lbl-row">Notiz / These<textarea id="projNoteContent" rows="8" placeholder="Markdown unterstützt"></textarea></label>
+      <div class="lbl-row" style="gap:8px">
+        <button class="tb-btn" id="projNoteSave" style="flex:1;background:var(--accent);color:#000">Speichern</button>
+        <button class="tb-btn" data-close="projectNoteModal">Abbrechen</button>
+      </div>
+    </div>
   </div>
 </div>
 
