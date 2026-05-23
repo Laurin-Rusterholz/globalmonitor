@@ -30,25 +30,19 @@ exports.handler = async (event) => {
     const { thesis, baseCountries = [], webSearch = false, recentEvents = [] } = body;
     if (!thesis) return json({ error: 'thesis required' }, 400);
 
+    // Aggressive Kürzung: max 4 Events, je 80 Zeichen. Spart Tokens → schnellere Antwort.
     const eventsHint = recentEvents.length
-      ? `\nAktuelle Live-Ereignisse: ${recentEvents.slice(0, 12).join('; ').slice(0, 800)}`
+      ? `\nLive-Events: ${recentEvents.slice(0, 4).map(e => String(e).slice(0,80)).join(' | ')}`
       : '';
 
-    const sys = `Du bist ein knapper geopolitischer Analyst. Antworte AUSSCHLIESSLICH mit JSON:
-{
-  "summary": "1 Satz",
-  "countries": [{"iso":"DE", "role":"primary|secondary|target|beneficiary|loser|bystander", "reason":"1 Satz"}],
-  "actors": [{"name":"NATO", "type":"alliance|state|ngo|other", "role":"1 Satz"}],
-  "thesisStrength": "high|medium|low",
-  "contextHints": ["max 3 Punkte"],
-  "openQuestions": ["max 3 Fragen"]
-}
-ISO-Codes 2-Buchstaben. Max 15 Länder, 6 Akteure.`;
+    // Ultra-knapper System-Prompt für Speed (Netlify Free 10s Hard-Limit)
+    const sys = `Geopolitik-Analyst. Antworte NUR mit JSON:
+{"summary":"1 Satz","countries":[{"iso":"DE","role":"primary|secondary|target|beneficiary|loser","reason":"kurz"}],"actors":[{"name":"NATO","type":"alliance|state|ngo|other","role":"kurz"}],"thesisStrength":"high|medium|low","contextHints":["max 3"],"openQuestions":["max 3"]}
+ISO 2-Buchst. Max 10 Länder, 4 Akteure.`;
 
-    const userMsg = `These: ${thesis}
-${baseCountries.length ? `Basis: ${baseCountries.join(',')}` : ''}${eventsHint}
-
-JSON liefern.`;
+    const userMsg = `These: ${String(thesis).slice(0, 400)}
+${baseCountries.length ? `Basis: ${baseCountries.slice(0,10).join(',')}` : ''}${eventsHint}
+JSON.`;
 
     // WICHTIG: Netlify Free killt Functions nach 10s hart. Wenn wir eine Chain
     // mit mehreren 7.5s-Abort-Versuchen durchspielen, killt Netlify die Function
@@ -66,8 +60,9 @@ JSON liefern.`;
     const fastFallback = ['claude-haiku-4-5', 'claude-3-5-haiku-latest']; // Fast-fail-Chain bei Modell-unbekannt
 
     const modelChain = [primary, ...fastFallback];
-    // 6.5s Abort: Netlify Free hat 10s incl. Cold-Start (~2s). 6.5 + 2 cold + 1 response-handling = ~9.5s.
-    const perAttemptAbortMs = 6500;
+    // 7.5s Abort: Mit max_tokens:400 + lean prompt sollte Haiku in 2-4s antworten.
+    // Budget: 7.5s API + ~1.5s cold/response = ~9s, sicher unter 10s.
+    const perAttemptAbortMs = 7500;
 
     let lastStatus = null;
     let lastErrBody = '';
@@ -77,8 +72,8 @@ JSON liefern.`;
       const modelName = modelChain[i];
       const reqBody = {
         model: modelName,
-        // 800 statt 1200 → spürbar schneller, reicht für strukturierte Antwort
-        max_tokens: 800,
+        // 400 statt 800 → Haiku 4.5 schafft ~300 tok/sec, also 1.5s pure Generation
+        max_tokens: 400,
         system: sys,
         messages: [{ role: 'user', content: userMsg }],
       };

@@ -4609,7 +4609,23 @@ function renderProjOverview(body) {
       <div style="color:var(--ink-dim);white-space:pre-wrap;font-size:11px">${escapeHtml(e.msg)}</div>
       ${e.bgErr ? `<div style="font-size:10px;color:var(--ink-faint);margin-top:4px">Background-Vorlauf: ${escapeHtml(e.bgErr)}</div>` : ''}
       ${e.parsed?.apiStatus ? `<div style="font-size:10px;color:var(--ink-faint);margin-top:4px">API-Status: ${e.parsed.apiStatus}${e.parsed.model?' · Modell: '+escapeHtml(e.parsed.model):''}</div>` : ''}
-      ${e.parsed?.timeout ? `<div style="font-size:10.5px;margin-top:6px;color:var(--protest)">→ These ist zu komplex für den 10s-Sync. Tipp: kürzer formulieren oder Netlify-Blobs aktivieren (dann läuft Background mit 15min).</div>` : ''}
+      ${e.parsed?.timeout ? `<div style="font-size:10.5px;margin-top:6px;color:var(--protest)">→ Anthropic antwortet zu langsam für den 10s-Limit von Netlify Free. Versuche es nochmal (Cold-Start war evtl. dran), oder aktiviere Background-Modus (siehe unten).</div>` : ''}
+      ${e.bgErr?.includes('UNSUPPORTED') ? `
+        <details style="margin-top:8px;padding:8px 10px;background:rgba(33,199,214,0.08);border:1px solid rgba(33,199,214,0.35);border-radius:6px">
+          <summary style="cursor:pointer;color:var(--accent);font-size:11px;font-weight:600">🔧 Background-Modus aktivieren (1× einrichten → 15min Timeout)</summary>
+          <div style="margin-top:8px;font-size:11px;color:var(--ink-dim);line-height:1.6">
+            <b>Auf <a href="https://app.netlify.com" target="_blank" style="color:var(--accent)">app.netlify.com</a> → deine Site:</b><br>
+            1) <b>Storage → Blobs</b> öffnen und einmal aktivieren<br>
+            2) <b>User Settings → Applications → Personal access tokens → New token</b> erstellen<br>
+            3) <b>Site → Site settings → Environment variables</b>:<br>
+            &nbsp;&nbsp;• <code style="background:var(--panel-3);padding:1px 5px;border-radius:3px">NETLIFY_API_TOKEN</code> = dein Token aus Schritt 2<br>
+            &nbsp;&nbsp;• <code style="background:var(--panel-3);padding:1px 5px;border-radius:3px">NETLIFY_SITE_ID</code> = deine Site-ID (Site settings → General)<br>
+            4) Site neu deployen (Deploys → Trigger deploy)<br>
+            <br>
+            Danach läuft Projekt-Analyse asynchron im Hintergrund mit bis zu 15min Anthropic-Zeit.
+          </div>
+        </details>
+      ` : ''}
       <div style="font-size:9.5px;color:var(--ink-faint);margin-top:5px">${new Date(e.when).toLocaleTimeString('de-CH')}</div>
     </div>`;
   }
@@ -5129,10 +5145,11 @@ async function runProjectAnalysis(forceWeb = false) {
   const btn = document.getElementById('rerunAnalysis');
   const origBtnText = btn?.textContent;
   if (btn) { btn.disabled = true; }
+  // Aggressiv begrenzt (kleinerer Prompt = schnellere Anthropic-Antwort = passt in 10s-Sync)
   const recentEvents = [];
-  (conflictStore || []).slice(0, 30).forEach(e => recentEvents.push(`Konflikt: ${e.n}${e.i?' - '+e.i:''}`));
-  (osintStore || []).slice(0, 15).forEach(it => recentEvents.push(`OSINT [${it.source}]: ${it.title}`));
-  (R?.militaryActions || []).forEach(a => recentEvents.push(`Mil-Aktion: ${a.n} (${a.since}) - ${a.d}`));
+  (conflictStore || []).slice(0, 5).forEach(e => recentEvents.push(`Konflikt: ${e.n}`));
+  (osintStore || []).slice(0, 3).forEach(it => recentEvents.push(`OSINT: ${it.title?.slice(0,80)}`));
+  (R?.militaryActions || []).slice(0, 3).forEach(a => recentEvents.push(`Mil: ${a.n}`));
 
   let data = null;
   let bgErr = null;
