@@ -10,12 +10,17 @@ catch (e) {
 
 function projStore() {
   if (!blobsModule) throw new Error('Netlify Blobs Package nicht installiert: ' + (blobsImportError||'?'));
-  // Versuche einfachste Form zuerst
+  // Falls Auto-Context fehlt: explizit mit siteID + token aus ENV
+  const siteID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID;
+  const token = process.env.NETLIFY_API_TOKEN || process.env.NETLIFY_BLOBS_TOKEN;
   try {
+    if (siteID && token) {
+      return blobsModule.getStore({ name: 'research-projects', siteID, token });
+    }
     return blobsModule.getStore('research-projects');
   } catch (e) {
-    // Fallback mit explicit name option
-    return blobsModule.getStore({ name: 'research-projects' });
+    try { return blobsModule.getStore({ name: 'research-projects', siteID, token }); }
+    catch { throw e; }
   }
 }
 function json(obj, status = 200) {

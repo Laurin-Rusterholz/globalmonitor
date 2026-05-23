@@ -9,7 +9,10 @@ catch (e) { console.error('@netlify/blobs nicht verfügbar:', e.message); }
 
 function jobStore() {
   if (!blobsModule) throw new Error('Netlify Blobs nicht verfügbar');
-  return blobsModule.getStore({ name: 'ai-jobs', consistency: 'strong' });
+  const siteID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID;
+  const token = process.env.NETLIFY_API_TOKEN || process.env.NETLIFY_BLOBS_TOKEN;
+  if (siteID && token) return blobsModule.getStore({ name: 'ai-jobs', siteID, token });
+  return blobsModule.getStore('ai-jobs');
 }
 
 async function setJob(jobId, payload) {
@@ -23,13 +26,17 @@ exports.handler = async (event) => {
   // Background-Function: liefert automatisch 202 zurück
   let body;
   try { body = JSON.parse(event.body || '{}'); } catch { body = {}; }
-  const { jobId, thesis, baseCountries = [], webSearch = false } = body;
+  const { jobId, thesis, baseCountries = [], webSearch = false, recentEvents = [] } = body;
   if (!jobId || !thesis) {
     console.error('Background fehlt jobId oder thesis');
     return { statusCode: 200, body: '' };
   }
 
   await setJob(jobId, { status: 'running', started: new Date().toISOString() });
+
+  const eventsContext = recentEvents.length
+    ? `\n\nAKTUELLE EREIGNISSE (Live-Daten):\n${recentEvents.slice(0, 40).map(e => '- ' + e).join('\n')}`
+    : '';
 
   if (!process.env.ANTHROPIC_API_KEY) {
     await setJob(jobId, { status: 'error', error: 'ANTHROPIC_API_KEY fehlt', completed: new Date().toISOString() });
@@ -55,9 +62,9 @@ Antworte AUSSCHLIESSLICH mit:
 ISO-Codes immer 2-Buchstaben. Sei umfassend - liste alle Länder die direkt oder indirekt betroffen sind.`;
 
   const userMsg = `These: "${thesis}"
-${baseCountries.length ? `Basis-Länder vom Nutzer/Regelsystem vorgewählt: ${baseCountries.join(', ')}` : ''}
+${baseCountries.length ? `Basis-Länder vom Nutzer/Regelsystem vorgewählt: ${baseCountries.join(', ')}` : ''}${eventsContext}
 
-Liefere das strukturierte JSON.`;
+Beziehe die aktuellen Ereignisse in deine Analyse mit ein. Liefere das strukturierte JSON.`;
 
   const reqBody = {
     model: webSearch ? 'claude-sonnet-4-6' : 'claude-sonnet-4-6', // Sonnet auch ohne Websearch - hat ja Zeit

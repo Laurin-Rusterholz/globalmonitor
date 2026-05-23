@@ -3741,7 +3741,7 @@ Analysiere die aktuelle Bedeutung, Effektivität, Konfliktrolle, interne Spannun
    BACKGROUND-JOB-HELPER (für AI-Calls > 10s)
    ════════════════════════════════════════════════════════════════ */
 window.runBackgroundJob = async function(endpoint, payload, opts = {}) {
-  const { maxWaitSec = 120, pollIntervalMs = 2000, onProgress } = opts;
+  const { maxWaitSec = 120, pollIntervalMs = 2500, onProgress } = opts;
   const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
   // Start - 202 wird sofort zurückgegeben
   const startRes = await fetch(`${CONFIG.BACKEND_BASE}/${endpoint}-background`, {
@@ -3750,20 +3750,31 @@ window.runBackgroundJob = async function(endpoint, payload, opts = {}) {
     body: JSON.stringify({...payload, jobId})
   });
   if (!startRes.ok && startRes.status !== 202) {
-    throw new Error(`Background-Start fehlgeschlagen: HTTP ${startRes.status}`);
+    throw new Error(`UNSUPPORTED:Background-Start failed HTTP ${startRes.status}`);
   }
-  // Poll
+  // Poll - mit Sicherheit gegen 500-Spam
   const maxIters = Math.ceil(maxWaitSec * 1000 / pollIntervalMs);
+  let consecutiveErrors = 0;
   for (let i = 0; i < maxIters; i++) {
     await new Promise(r => setTimeout(r, pollIntervalMs));
-    const r = await fetch(`${CONFIG.BACKEND_BASE}/getjob?id=${jobId}`);
-    if (!r.ok) continue;
-    const data = await r.json();
+    let data;
+    try {
+      const r = await fetch(`${CONFIG.BACKEND_BASE}/getjob?id=${jobId}`);
+      if (!r.ok) { consecutiveErrors++; if (consecutiveErrors >= 3) throw new Error('UNSUPPORTED:getjob 500'); continue; }
+      data = await r.json();
+      consecutiveErrors = 0;
+    } catch (e) {
+      if (e.message.startsWith('UNSUPPORTED')) throw e;
+      consecutiveErrors++;
+      if (consecutiveErrors >= 3) throw new Error('UNSUPPORTED:Polling-Netzwerk-Fehler');
+      continue;
+    }
+    if (data.status === 'unsupported') throw new Error('UNSUPPORTED:' + (data.error||'Blobs nicht verfügbar'));
     if (data.status === 'done') return data.result;
     if (data.status === 'error') throw new Error(data.error || 'Job-Fehler');
     if (onProgress) onProgress(i, maxIters, data);
   }
-  throw new Error(`Timeout nach ${maxWaitSec}s - Job läuft noch (kommt evtl. später in Blobs an)`);
+  throw new Error(`Timeout nach ${maxWaitSec}s`);
 };
 
 /* ════════════════════════════════════════════════════════════════
@@ -3874,18 +3885,36 @@ async function aiOnlySuggest() {
   const origBtn = btn.textContent;
   btn.disabled = true; btn.textContent = '… KI 0s';
 
-  try {
-    const data = await window.runBackgroundJob('projectanalyze', {
-      thesis: combined, baseCountries: ruleHits, webSearch: false
-    }, {
-      maxWaitSec: 180,
-      pollIntervalMs: 2500,
-      onProgress: (i) => {
-        const sec = Math.round(i * 2.5);
-        btn.textContent = `… KI ${sec}s`;
-      }
-    });
+  // Aktuelle Ereignisse aus den Stores als Kontext zusammenstellen
+  const recentEvents = [];
+  (conflictStore || []).slice(0, 30).forEach(e => recentEvents.push(`Konflikt: ${e.n}${e.i?' - '+e.i:''}`));
+  (osintStore || []).slice(0, 15).forEach(it => recentEvents.push(`OSINT [${it.source}]: ${it.title}`));
+  (R?.militaryActions || []).forEach(a => recentEvents.push(`Mil-Aktion: ${a.n} (${a.since}) - ${a.d}`));
 
+  try {
+    let data;
+    try {
+      // 1. Versuch: Background Function (lang erlaubt)
+      data = await window.runBackgroundJob('projectanalyze', {
+        thesis: combined, baseCountries: ruleHits, webSearch: false, recentEvents
+      }, {
+        maxWaitSec: 60, pollIntervalMs: 2500,
+        onProgress: (i) => { btn.textContent = `… KI ${Math.round(i * 2.5)}s`; }
+      });
+    } catch (bgErr) {
+      if (!bgErr.message.startsWith('UNSUPPORTED')) throw bgErr;
+      console.warn('Background nicht verfügbar, sync-Fallback');
+      btn.textContent = '… sync 0s';
+      preview.innerHTML = `<i style="color:var(--protest)">Sync-Modus (Blobs nicht aktiv)…</i>`;
+      const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ thesis: combined, baseCountries: ruleHits, webSearch: false, recentEvents })
+      });
+      const text = await res.text();
+      let parsed; try { parsed = JSON.parse(text); } catch { parsed = { error: 'kein JSON', raw: text.slice(0,200) }; }
+      if (!res.ok || parsed.error) throw new Error(parsed.error || `HTTP ${res.status}`);
+      data = parsed;
+    }
     const countries = (data.countries || []).filter(c => c.iso);
     if (countries.length) {
       const isos = countries.map(c => c.iso);
@@ -4615,21 +4644,43 @@ Antworte präzise, mit konkreten Akteuren, Daten, Zusammenhängen. Deutsch, max 
 
 async function runProjectAnalysis(forceWeb = false) {
   if (!activeProject) return;
-  toast('KI analysiert These (kann 30-90s dauern, läuft im Hintergrund)…');
+  toast('KI analysiert These…');
+  const recentEvents = [];
+  (conflictStore || []).slice(0, 30).forEach(e => recentEvents.push(`Konflikt: ${e.n}${e.i?' - '+e.i:''}`));
+  (osintStore || []).slice(0, 15).forEach(it => recentEvents.push(`OSINT [${it.source}]: ${it.title}`));
+  (R?.militaryActions || []).forEach(a => recentEvents.push(`Mil-Aktion: ${a.n} (${a.since}) - ${a.d}`));
+
+  let data;
   try {
-    const data = await window.runBackgroundJob('projectanalyze', {
+    data = await window.runBackgroundJob('projectanalyze', {
       thesis: activeProject.thesis,
       baseCountries: activeProject.countries,
-      webSearch: forceWeb
+      webSearch: forceWeb,
+      recentEvents
     }, {
-      maxWaitSec: 180,
+      maxWaitSec: 60,
       pollIntervalMs: 3000,
       onProgress: (i) => {
-        const sec = Math.round(i * 3);
         const btn = document.getElementById('rerunAnalysis');
-        if (btn) btn.textContent = `… KI denkt (${sec}s)`;
+        if (btn) btn.textContent = `… KI ${Math.round(i * 3)}s`;
       }
     });
+  } catch (bgErr) {
+    if (bgErr.message.startsWith('UNSUPPORTED')) {
+      toast('Background nicht aktiv - Sync-Fallback');
+      try {
+        const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ thesis: activeProject.thesis, baseCountries: activeProject.countries, webSearch: false, recentEvents })
+        });
+        const text = await res.text();
+        try { data = JSON.parse(text); }
+        catch { data = { error: 'kein JSON', raw: text.slice(0,200) }; }
+        if (data.error) { toast('Sync-Fehler: ' + data.error); return; }
+      } catch (e) { toast('Sync-Fehler: ' + e.message); return; }
+    } else { toast('Analyse-Fehler: ' + bgErr.message); return; }
+  }
+  try {
     await saveProject({
       relatedCountries: data.countries || [],
       actors: data.actors || [],
@@ -4641,7 +4692,7 @@ async function runProjectAnalysis(forceWeb = false) {
     applyProjectHighlights();
     renderProjectTab('overview');
     toast('Analyse fertig: ' + (data.countries?.length||0) + ' Länder, ' + (data.actors?.length||0) + ' Akteure');
-  } catch (e) { toast('Analyse-Fehler: ' + e.message); }
+  } catch (e) { toast('Speichern-Fehler: ' + e.message); }
 }
 
 function applyProjectHighlights() {

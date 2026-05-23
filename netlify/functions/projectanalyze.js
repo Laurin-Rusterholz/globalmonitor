@@ -7,8 +7,12 @@ exports.handler = async (event) => {
 
   try {
     const body = JSON.parse(event.body || '{}');
-    const { thesis, baseCountries = [], webSearch = false } = body;
+    const { thesis, baseCountries = [], webSearch = false, recentEvents = [] } = body;
     if (!thesis) return json({ error: 'thesis required' }, 400);
+
+    const eventsContext = recentEvents.length
+      ? `\n\nAKTUELLE EREIGNISSE (Live-Daten aus der App):\n${recentEvents.slice(0, 40).map(e => '- ' + e).join('\n')}`
+      : '';
 
     const sys = `Du bist ein geopolitischer Analyst. Analysiere die gegebene Forschungs-These und liefere eine STRUKTURIERTE JSON-Antwort mit allen beteiligten/betroffenen Ländern und Akteuren.
 
@@ -30,9 +34,9 @@ ISO-Codes immer 2-Buchstaben (z.B. DE, US, CN, RU, IL, etc.).
 Sei umfassend - liste alle Länder die direkt oder indirekt betroffen sind.`;
 
     const userMsg = `These: "${thesis}"
-${baseCountries.length ? `Basis-Länder vom Nutzer vorgewählt: ${baseCountries.join(', ')}` : ''}
+${baseCountries.length ? `Basis-Länder vom Nutzer vorgewählt: ${baseCountries.join(', ')}` : ''}${eventsContext}
 
-Liefere das strukturierte JSON.`;
+Beziehe die aktuellen Ereignisse in deine Analyse mit ein. Liefere das strukturierte JSON.`;
 
     async function callModel(modelName, maxTokens, timeoutMs) {
       const reqBody = { model: modelName, max_tokens: maxTokens, system: sys, messages: [{ role: 'user', content: userMsg }] };
