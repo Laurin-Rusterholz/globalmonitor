@@ -1,102 +1,94 @@
-// AI analysiert eine Projekt-These und liefert beteiligte Länder/Akteure
-// mit Rolle und Intensität - für automatisches Highlighten der Karte.
+// Synchrone Projekt-Analyse (max ~10s Netlify Free)
+// Schlankes Prompt + Haiku für Speed
+// Bei Fehler: detaillierte Fehlermeldung statt 500-Blackbox
 
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') return json({ error: 'POST required' }, 405);
-  if (!process.env.ANTHROPIC_API_KEY) return json({ error: 'ANTHROPIC_API_KEY fehlt' }, 500);
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return json({ error: 'ANTHROPIC_API_KEY ENV-Var fehlt in Netlify' }, 500);
+  }
 
   try {
     const body = JSON.parse(event.body || '{}');
     const { thesis, baseCountries = [], webSearch = false, recentEvents = [] } = body;
     if (!thesis) return json({ error: 'thesis required' }, 400);
 
-    const eventsContext = recentEvents.length
-      ? `\n\nAKTUELLE EREIGNISSE (Live-Daten aus der App):\n${recentEvents.slice(0, 40).map(e => '- ' + e).join('\n')}`
+    const eventsHint = recentEvents.length
+      ? `\nAktuelle Live-Ereignisse: ${recentEvents.slice(0, 12).join('; ').slice(0, 800)}`
       : '';
 
-    const sys = `Du bist ein geopolitischer Analyst. Analysiere die gegebene Forschungs-These und liefere eine STRUKTURIERTE JSON-Antwort mit allen beteiligten/betroffenen Ländern und Akteuren.
-
-Antworte AUSSCHLIESSLICH mit:
+    const sys = `Du bist ein knapper geopolitischer Analyst. Antworte AUSSCHLIESSLICH mit JSON:
 {
-  "summary": "1-2 Sätze zur These und ihrem Kontext",
-  "countries": [
-    {"iso":"DE", "role":"primary|secondary|target|bystander|beneficiary|loser", "intensity":"high|medium|low", "reason":"konkrete Begründung in 1 Satz"}
-  ],
-  "actors": [
-    {"name":"NATO", "type":"alliance|state|ngo|company|terror|other", "role":"...", "stake":"..."}
-  ],
-  "thesisStrength": "high|medium|low|weak - wie stark ist die These belegbar?",
-  "contextHints": ["wichtige Kontext-Punkte zur These"],
-  "openQuestions": ["zentrale offene Fragen für die Recherche"]
+  "summary": "1 Satz",
+  "countries": [{"iso":"DE", "role":"primary|secondary|target|beneficiary|loser|bystander", "reason":"1 Satz"}],
+  "actors": [{"name":"NATO", "type":"alliance|state|ngo|other", "role":"1 Satz"}],
+  "thesisStrength": "high|medium|low",
+  "contextHints": ["max 3 Punkte"],
+  "openQuestions": ["max 3 Fragen"]
 }
+ISO-Codes 2-Buchstaben. Max 15 Länder, 6 Akteure.`;
 
-ISO-Codes immer 2-Buchstaben (z.B. DE, US, CN, RU, IL, etc.).
-Sei umfassend - liste alle Länder die direkt oder indirekt betroffen sind.`;
+    const userMsg = `These: ${thesis}
+${baseCountries.length ? `Basis: ${baseCountries.join(',')}` : ''}${eventsHint}
 
-    const userMsg = `These: "${thesis}"
-${baseCountries.length ? `Basis-Länder vom Nutzer vorgewählt: ${baseCountries.join(', ')}` : ''}${eventsContext}
+JSON liefern.`;
 
-Beziehe die aktuellen Ereignisse in deine Analyse mit ein. Liefere das strukturierte JSON.`;
-
-    async function callModel(modelName, maxTokens, timeoutMs) {
-      const reqBody = { model: modelName, max_tokens: maxTokens, system: sys, messages: [{ role: 'user', content: userMsg }] };
-      if (webSearch) reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }];
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), timeoutMs);
-      try {
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify(reqBody), signal: ctrl.signal
-        });
-        if (!res.ok) {
-          const t = await res.text().catch(()=>'');
-          throw new Error(`API ${res.status}: ${t.slice(0,150)}`);
-        }
-        return await res.json();
-      } finally { clearTimeout(t); }
+    const reqBody = {
+      model: webSearch ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001',
+      max_tokens: 1200,
+      system: sys,
+      messages: [{ role: 'user', content: userMsg }],
+    };
+    if (webSearch) {
+      reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }];
     }
 
-    let data, modelUsed;
-    // Erst Haiku (schnell), wenn Parse-Fail dann Sonnet
+    const ctrl = new AbortController();
+    const tHandle = setTimeout(() => ctrl.abort(), 8500);
+    let apiRes;
     try {
-      data = await callModel(webSearch ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001', 1500, 9000);
-      modelUsed = webSearch ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001';
+      apiRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify(reqBody),
+        signal: ctrl.signal
+      });
     } catch (e) {
-      console.warn('Erst-Call fehlgeschlagen, versuche Sonnet:', e.message);
-      data = await callModel('claude-sonnet-4-6', 1500, 9000);
-      modelUsed = 'claude-sonnet-4-6';
+      if (e.name === 'AbortError') return json({ error:'Anthropic-API-Timeout nach 8.5s. Versuche kürzere These oder check Quota.', timeout:true }, 500);
+      return json({ error: 'Netzwerk: ' + e.message }, 500);
+    } finally { clearTimeout(tHandle); }
+
+    if (!apiRes.ok) {
+      const errBody = await apiRes.text().catch(()=>'');
+      let detail = errBody.slice(0, 400);
+      if (apiRes.status === 401) detail = 'API-Key ungültig: ' + detail;
+      else if (apiRes.status === 402 || errBody.includes('credit') || errBody.includes('balance')) detail = 'Anthropic-Guthaben aufgebraucht: ' + detail;
+      else if (apiRes.status === 429) detail = 'Rate Limit erreicht: ' + detail;
+      else if (apiRes.status === 400 && errBody.includes('model')) detail = 'Modell-Name ungültig: ' + detail;
+      return json({ error: `API HTTP ${apiRes.status} - ${detail}`, apiStatus: apiRes.status }, 500);
     }
 
+    const data = await apiRes.json();
     const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-    if (!text) return json({ error: 'Leere KI-Antwort', rawData: data }, 500);
+    if (!text) return json({ error: 'Leere KI-Antwort' }, 500);
+
     const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return json({ error: 'Kein JSON-Block in Antwort', raw: text.slice(0,500) }, 500);
+    if (!m) return json({ error: 'Kein JSON in Antwort: ' + text.slice(0,200) }, 500);
     let parsed;
     try { parsed = JSON.parse(m[0]); }
-    catch (e) {
-      // Retry mit Sonnet wenn Haiku schlechtes JSON
-      if (modelUsed !== 'claude-sonnet-4-6') {
-        console.warn('Haiku JSON kaputt, retry mit Sonnet');
-        try {
-          const data2 = await callModel('claude-sonnet-4-6', 1500, 9000);
-          const text2 = (data2.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-          const m2 = text2.match(/\{[\s\S]*\}/);
-          parsed = JSON.parse(m2[0]);
-          modelUsed = 'claude-sonnet-4-6';
-        } catch (e2) {
-          return json({ error: 'JSON-Parse fehlgeschlagen (beide Modelle)', raw: text.slice(0,500) }, 500);
-        }
-      } else {
-        return json({ error: 'JSON-Parse-Fehler', raw: text.slice(0,500) }, 500);
-      }
-    }
+    catch (e) { return json({ error: 'JSON-Parse-Fehler: ' + e.message, raw: text.slice(0,300) }, 500); }
+
     parsed.generated = new Date().toISOString();
-    parsed.model = modelUsed;
+    parsed.model = reqBody.model;
     parsed.webSearchUsed = !!webSearch;
     return json(parsed);
+
   } catch (e) {
-    return json({ error: e.message }, 500);
+    return json({ error: 'Unerwarteter Fehler: ' + e.message }, 500);
   }
 };
 

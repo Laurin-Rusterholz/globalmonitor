@@ -552,7 +552,7 @@ function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
   let actions = '';
   if (lat !== undefined) {
     if (EVENT_TYPES.has(sourceKey)) {
-      // Event-Popup mit Analyse-Buttons
+      // Event-Popup mit allen Analyse-Buttons
       actions = `<div class="popup-actions">
         <button onclick="window.analyzeEvent('${sourceKey}',${lat},${lng},'${safeTitle}',false)">💬 KI</button>
         <button onclick="window.openWebsearch('${safeTitle}','news')" title="Google-Suche mit News-Quellen">🌐 Web</button>
@@ -561,7 +561,11 @@ function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
         <button onclick="window.askAboutRegion(${lat},${lng},'${safeTitle}')">📋 Region</button>
       </div>`;
     } else {
-      actions = `<br><span class="ask-region" onclick="window.askAboutRegion(${lat},${lng},'${safeTitle}')">→ Region öffnen</span>`;
+      // Generisches Popup (Häfen/Basen/AKW/etc) - Web + KI Buttons immer dabei
+      actions = `<div class="popup-actions">
+        <button onclick="window.openWebsearch('${safeTitle}','news')" title="Web-Suche mit News-Quellen">🌐 Web</button>
+        <button onclick="window.askAboutRegion(${lat},${lng},'${safeTitle}')">📋 Region öffnen</button>
+      </div>`;
     }
   }
   let srcHtml = '';
@@ -3974,9 +3978,16 @@ async function aiOnlySuggest() {
   } catch (e) {
     console.error('KI-Background-Fehler:', e);
     let hint = '';
-    if (e.message.includes('Timeout')) hint = ' Probier kürzere These oder Anthropic-Quota prüfen.';
-    else if (e.message.includes('credit') || e.message.includes('balance')) hint = ' Anthropic-Guthaben prüfen (console.anthropic.com).';
-    preview.innerHTML += `<br><small style="color:var(--conflict);font-size:10px"><b>⚠ KI:</b> ${escapeHtml(e.message)}${hint}</small>`;
+    if (e.message.includes('Timeout') || e.message.includes('aborted')) hint = '\n\n→ Probier kürzere These. Wenn auch das nicht hilft: Anthropic-Quota prüfen.';
+    else if (e.message.toLowerCase().includes('credit') || e.message.toLowerCase().includes('balance') || e.message.includes('402')) hint = '\n\n→ Anthropic-Guthaben aufgebraucht. Lade in console.anthropic.com nach.';
+    else if (e.message.includes('401') || e.message.includes('API-Key')) hint = '\n\n→ ANTHROPIC_API_KEY ungültig in Netlify ENV.';
+    else if (e.message.includes('429')) hint = '\n\n→ Rate Limit. Warte 60 Sek.';
+    else if (e.message.includes('500')) hint = '\n\n→ Server-Fehler. Probiere nochmal.';
+    // Sichtbarer Alert-Box im Preview
+    preview.innerHTML += `<div style="margin-top:10px;padding:11px 13px;background:rgba(255,69,58,0.15);border:1px solid rgba(255,69,58,0.5);border-radius:8px;color:var(--ink)">
+      <b style="color:#ff453a">⚠ KI-Analyse fehlgeschlagen</b><br>
+      <small style="color:var(--ink-dim);white-space:pre-wrap;font-size:11px">${escapeHtml(e.message)}${escapeHtml(hint)}</small>
+    </div>`;
   }
   btn.disabled = false; btn.textContent = origBtn;
 }
@@ -4195,7 +4206,40 @@ async function loadProject(id) {
 function enterProjectMode() {
   document.body.classList.add('project-mode');
   document.getElementById('projModeName').textContent = activeProject?.name || 'Projekt';
+  // Gespeicherte Breite anwenden
+  const savedW = localStorage.getItem('gm_proj_panel_width');
+  if (savedW) document.getElementById('projectPanel').style.width = savedW;
+  setTimeout(() => map.invalidateSize(), 200);
 }
+
+// Resize-Handle drag-Logik
+(function setupProjResize(){
+  const handle = document.getElementById('projPanelResize');
+  if (!handle) return;
+  const panel = document.getElementById('projectPanel');
+  let dragging = false, startX = 0, startW = 0;
+  handle.addEventListener('mousedown', (e) => {
+    dragging = true; startX = e.clientX; startW = panel.offsetWidth;
+    handle.classList.add('active');
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const newW = Math.max(400, Math.min(window.innerWidth * 0.8, startW + (e.clientX - startX)));
+    panel.style.width = newW + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('active');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem('gm_proj_panel_width', panel.style.width);
+    map.invalidateSize();
+  });
+})();
 
 function exitProjectMode() {
   document.body.classList.remove('project-mode');
@@ -4484,6 +4528,7 @@ function renderProjMaterials(body) {
           <span class="mat-type-icon" title="${info.label}">${info.icon}</span>
           <div class="mat-title">${escapeHtml(m.title || info.label)}</div>
           <div class="mat-actions">
+            <button data-act="web" data-id="${m.id}" title="Web-Suche">🌐</button>
             <button data-act="edit" data-id="${m.id}">✏</button>
             <button data-act="del" data-id="${m.id}">🗑</button>
           </div>
@@ -4514,6 +4559,10 @@ function renderProjMaterials(body) {
       const m = p.materials.find(x => x.id === b.dataset.id);
       if (!m) return;
       if (b.dataset.act === 'edit') openMaterialModal(m);
+      else if (b.dataset.act === 'web') {
+        const q = m.title || m.content?.slice(0,60) || '';
+        if (q) window.openWebsearch(q, 'news');
+      }
       else if (b.dataset.act === 'del') {
         if (!confirm('Material löschen?')) return;
         p.materials = p.materials.filter(x => x.id !== m.id);
@@ -4543,6 +4592,11 @@ function openMaterialModal(material = null) {
   setTimeout(() => document.getElementById('matTitle').focus(), 80);
 }
 
+document.getElementById('matWebSearch')?.addEventListener('click', () => {
+  const t = document.getElementById('matTitle').value.trim() || document.getElementById('matContent').value.trim().slice(0,60);
+  if (!t) return toast('Erst Titel oder Inhalt eingeben');
+  window.openWebsearch(t, 'news');
+});
 document.getElementById('matSave')?.addEventListener('click', async () => {
   if (!activeProject) return;
   const editId = document.getElementById('materialModal').dataset.editId;
@@ -4864,6 +4918,11 @@ function openProjectNoteModal(iso, name, latlng = null) {
   openModal('projectNoteModal');
 }
 
+document.getElementById('projNoteWebSearch')?.addEventListener('click', () => {
+  const t = document.getElementById('projNoteTitle').value.trim() || document.getElementById('projNoteContent').value.trim().slice(0,60);
+  if (!t) return toast('Erst Titel/Inhalt eingeben');
+  window.openWebsearch(t, 'news');
+});
 document.getElementById('projNoteSave')?.addEventListener('click', async () => {
   if (!activeProject) return;
   const modal = document.getElementById('projectNoteModal');

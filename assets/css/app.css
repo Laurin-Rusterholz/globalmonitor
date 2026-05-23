@@ -543,10 +543,18 @@ body.project-mode #topbar{
 }
 body.project-mode #projectPanel{
   position:absolute; top:0; left:0; right:auto;
-  width:640px; max-width:48vw;
+  width:50vw; min-width:480px; max-width:80vw;
   border-left:none; border-right:2px solid var(--protest);
   transform:translateX(0);
   box-shadow:20px 0 50px rgba(0,0,0,.65);
+}
+body.project-mode #projectPanel .resize-handle{
+  position:absolute; right:-4px; top:0; bottom:0; width:8px;
+  cursor:ew-resize; background:transparent; z-index:1300;
+}
+body.project-mode #projectPanel .resize-handle:hover,
+body.project-mode #projectPanel .resize-handle.active{
+  background:linear-gradient(90deg,transparent,rgba(255,200,61,.5),transparent);
 }
 body.project-mode #projectPanel .osint-head::after{background:radial-gradient(circle,rgba(255,200,61,.32),transparent 70%)}
 body.project-mode #map{margin-left:0}
@@ -566,11 +574,11 @@ body:not(.project-mode) .proj-mode-indicator{display:none}
 /* Projekt-Toolbar (links unten, nur Projekt-Modus) */
 .proj-toolbar{display:none}
 body.project-mode .proj-toolbar{
-  display:flex; position:absolute; top:60px; left:660px; right:14px; z-index:1100;
+  display:flex; position:absolute; top:60px; right:14px; z-index:1100;
   background:rgba(15,20,29,.95); backdrop-filter:blur(10px);
   border:1px solid var(--protest); border-radius:24px;
   padding:5px 8px; gap:5px; box-shadow:0 8px 24px rgba(0,0,0,.5);
-  flex-wrap:wrap; max-width:calc(100vw - 680px); align-items:center
+  flex-wrap:wrap; align-items:center; max-width:600px
 }
 .ptb-btn{background:var(--panel-2);border:1px solid var(--line-2);color:var(--ink);
   border-radius:18px;padding:6px 12px;cursor:pointer;font-family:inherit;font-size:11px;white-space:nowrap}
