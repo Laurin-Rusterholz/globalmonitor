@@ -670,6 +670,15 @@ body.project-mode .proj-toolbar{
 .draw-sub-toolbar button:hover{border-color:var(--protest);color:var(--protest)}
 .draw-sub-toolbar button.active{background:var(--protest);color:#000;border-color:var(--protest)}
 
+.draw-tools-group{display:flex;gap:5px;flex-wrap:wrap}
+.draw-colors{display:flex;gap:4px;padding:0 8px;border-left:1px solid var(--line);border-right:1px solid var(--line);margin:0 4px}
+.draw-color-btn{
+  width:24px;height:24px;border-radius:50%;border:2px solid rgba(255,255,255,0.2);
+  cursor:pointer;transition:all .15s;padding:0
+}
+.draw-color-btn:hover{transform:scale(1.15);border-color:rgba(255,255,255,0.5)}
+.draw-color-btn.active{border-color:#fff;box-shadow:0 0 0 2px var(--accent),0 0 8px rgba(255,255,255,0.4);transform:scale(1.1)}
+
 /* Draw-Labels */
 .draw-label{background:rgba(255,200,61,.95)!important;color:#000!important;
   border:1px solid rgba(0,0,0,.4)!important;border-radius:5px!important;

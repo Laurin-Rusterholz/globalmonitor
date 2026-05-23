@@ -580,17 +580,22 @@ function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
 }
 
 // Event-Analyse-Funktionen
-// Web-Suche mit Operatoren - öffnet neuen Tab
+// Web-Suche - öffnet Google in neuem Tab
+// Strip Emoji-Symbole und Sonderzeichen aus dem Query, keine Site-Restriktionen
 window.openWebsearch = function(query, scope = 'news') {
-  let q = `"${query}"`;
-  if (scope === 'news') {
-    q += ` (site:reuters.com OR site:bbc.com OR site:tagesschau.de OR site:nzz.ch OR site:dw.com OR site:aljazeera.com)`;
-  } else if (scope === 'osint') {
-    q += ` (site:bellingcat.com OR site:understandingwar.org OR site:longwarjournal.org OR site:csis.org OR site:rusi.org)`;
-  } else if (scope === 'recent') {
+  // Emoji/Symbole entfernen, doppelte Leerzeichen normalisieren
+  const cleaned = String(query || '')
+    .replace(/[☀-➿-\uD83C-􏰀-\uDFFF]/g, '')
+    .replace(/[^\p{L}\p{N}\s\-\.,\/]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return toast('Kein Suchbegriff');
+  let q = cleaned;
+  if (scope === 'recent') {
     const lastMonth = new Date(Date.now() - 30*86400000).toISOString().slice(0,10);
     q += ` after:${lastMonth}`;
   }
+  // Quellen-Restriktion entfernt - User will offene Suche
   const url = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
   window.open(url, '_blank', 'noopener');
 };
@@ -5161,34 +5166,67 @@ setTimeout(initDraggableUI, 300);
    ════════════════════════════════════════════════════════════════ */
 let drawnItems = L.featureGroup();
 let drawingActive = false;
-let drawMode = null; // 'point' | 'line' | 'polygon' | 'rect' | 'circle'
+let drawMode = null; // 'point' | 'line' | 'polygon' | 'rect' | 'circle' | 'freehand'
 let drawPoints = [];
 let drawPreviewLayer = null;
+let drawColor = '#ffc83d'; // Standard-Farbe (gelb)
+let freehandActive = false;
+let freehandLine = null;
+
+const DRAW_COLORS = [
+  '#ffc83d', // gelb
+  '#ff453a', // rot
+  '#0a84ff', // blau
+  '#30d158', // grün
+  '#bf5af2', // lila
+  '#ff9500', // orange
+  '#ff375f', // pink
+  '#ffffff'  // weiß
+];
 
 function showDrawToolbar() {
-  // Zweite Toolbar mit Werkzeug-Auswahl
   let bar = document.getElementById('drawSubToolbar');
   if (!bar) {
     bar = document.createElement('div');
     bar.id = 'drawSubToolbar';
     bar.className = 'draw-sub-toolbar';
+    const colorBtns = DRAW_COLORS.map(c =>
+      `<button class="draw-color-btn" data-col="${c}" style="background:${c}" title="${c}"></button>`
+    ).join('');
     bar.innerHTML = `
-      <button class="ptb-btn" data-dm="point">📍 Punkt</button>
-      <button class="ptb-btn" data-dm="line">─ Linie</button>
-      <button class="ptb-btn" data-dm="polygon">△ Polygon</button>
-      <button class="ptb-btn" data-dm="rect">▢ Rechteck</button>
-      <button class="ptb-btn" data-dm="circle">○ Kreis</button>
-      <span style="font-size:10px;color:var(--ink-dim);align-self:center;padding:0 8px">Klick auf Karte · Doppelklick beendet</span>
+      <div class="draw-tools-group">
+        <button class="ptb-btn" data-dm="point">📍 Punkt</button>
+        <button class="ptb-btn" data-dm="line">─ Linie</button>
+        <button class="ptb-btn" data-dm="polygon">△ Polygon</button>
+        <button class="ptb-btn" data-dm="rect">▢ Rechteck</button>
+        <button class="ptb-btn" data-dm="circle">○ Kreis</button>
+        <button class="ptb-btn" data-dm="freehand">✏ Freihand</button>
+      </div>
+      <div class="draw-colors">${colorBtns}</div>
+      <span style="font-size:10px;color:var(--ink-dim);align-self:center;padding:0 8px;flex:1;min-width:0">
+        Linksklick = Punkt setzen · Rechtsklick = einzelner Punkt · Doppelklick = beendet · Freihand: Maus gedrückt halten
+      </span>
       <button class="ptb-btn" id="drawDone" style="background:var(--accent);color:#000">✓ Fertig</button>
     `;
     document.body.appendChild(bar);
     bar.querySelectorAll('button[data-dm]').forEach(b => {
       b.onclick = () => setDrawMode(b.dataset.dm);
     });
+    bar.querySelectorAll('.draw-color-btn').forEach(b => {
+      b.onclick = () => setDrawColor(b.dataset.col);
+    });
     document.getElementById('drawDone').onclick = finishDrawing;
     makeDraggable(bar, 'gm_drag_drawtoolbar');
+    setDrawColor(drawColor);
   }
   bar.style.display = 'flex';
+}
+
+function setDrawColor(color) {
+  drawColor = color;
+  document.querySelectorAll('.draw-color-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.col === color);
+  });
 }
 function hideDrawToolbar() {
   const bar = document.getElementById('drawSubToolbar');
@@ -5213,12 +5251,17 @@ function toggleDrawing() {
   btn.classList.toggle('active', drawingActive);
   if (drawingActive) {
     if (!map.hasLayer(drawnItems)) map.addLayer(drawnItems);
-    // Gespeicherte Zeichnungen laden
     if (activeProject.drawings) {
       try {
         const gj = L.geoJSON(activeProject.drawings, {
-          style: { color:'#ffc83d', weight:3, fillColor:'#ffc83d', fillOpacity:0.25 },
-          pointToLayer: (f, latlng) => L.circleMarker(latlng, { radius:7, color:'#ffc83d', fillColor:'#ffc83d', fillOpacity:0.8, weight:2 })
+          style: (feature) => {
+            const col = feature.properties?.color || '#ffc83d';
+            return { color:col, weight:3, fillColor:col, fillOpacity:0.25 };
+          },
+          pointToLayer: (f, latlng) => {
+            const col = f.properties?.color || '#ffc83d';
+            return L.circleMarker(latlng, { radius:7, color:col, fillColor:col, fillOpacity:0.8, weight:2 });
+          }
         });
         gj.eachLayer(l => {
           if (l.feature?.properties?.label) l.bindTooltip(l.feature.properties.label, { permanent:true, direction:'center', className:'draw-label' });
@@ -5228,30 +5271,91 @@ function toggleDrawing() {
     }
     showDrawToolbar();
     map.on('click', drawClickHandler);
+    map.on('contextmenu', drawRightClickHandler);
     map.on('dblclick', drawDblClickHandler);
+    map.on('mousedown', drawMouseDownFreehand);
     map.doubleClickZoom.disable();
-    toast('Zeichnen aktiv - wähle Werkzeug unten');
+    toast('Zeichnen aktiv - Werkzeug und Farbe wählen');
   } else {
     finishDrawing();
     hideDrawToolbar();
     map._container.style.cursor = '';
     map.off('click', drawClickHandler);
+    map.off('contextmenu', drawRightClickHandler);
     map.off('dblclick', drawDblClickHandler);
+    map.off('mousedown', drawMouseDownFreehand);
     map.doubleClickZoom.enable();
     toast('Zeichnen aus');
   }
 }
 
+// Rechtsklick auf Karte = Punkt setzen (im Zeichen-Modus)
+function drawRightClickHandler(e) {
+  L.DomEvent.preventDefault(e);
+  L.DomEvent.stopPropagation(e);
+  const ll = e.latlng;
+  const label = prompt('Beschriftung für Punkt (optional):', '');
+  const m = L.circleMarker(ll, { radius:8, color:drawColor, fillColor:drawColor, fillOpacity:0.85, weight:2 });
+  m.feature = { type:'Feature', properties:{ label: label||'', color: drawColor }, geometry:{ type:'Point', coordinates:[ll.lng, ll.lat] }};
+  if (label) m.bindTooltip(label, { permanent:true, direction:'top', className:'draw-label' });
+  drawnItems.addLayer(m);
+  saveDrawings();
+  toast('Punkt gesetzt');
+}
+
+// Freihand-Modus: Mouse-Down startet, Move zeichnet, Up beendet
+function drawMouseDownFreehand(e) {
+  if (drawMode !== 'freehand') return;
+  if (e.originalEvent?.button !== 0) return;
+  L.DomEvent.stopPropagation(e);
+  L.DomEvent.preventDefault(e);
+  freehandActive = true;
+  drawPoints = [e.latlng];
+  if (freehandLine) map.removeLayer(freehandLine);
+  freehandLine = L.polyline(drawPoints, { color:drawColor, weight:3 }).addTo(map);
+  map.dragging.disable();
+  map.on('mousemove', drawMouseMoveFreehand);
+  map.on('mouseup', drawMouseUpFreehand);
+}
+function drawMouseMoveFreehand(e) {
+  if (!freehandActive) return;
+  drawPoints.push(e.latlng);
+  freehandLine.setLatLngs(drawPoints);
+}
+function drawMouseUpFreehand(e) {
+  if (!freehandActive) return;
+  freehandActive = false;
+  map.dragging.enable();
+  map.off('mousemove', drawMouseMoveFreehand);
+  map.off('mouseup', drawMouseUpFreehand);
+  if (drawPoints.length > 2) {
+    // Speichern
+    const label = prompt('Beschriftung (optional):', '') || '';
+    const layer = L.polyline(drawPoints, { color:drawColor, weight:3 });
+    layer.feature = {
+      type:'Feature',
+      properties:{ label, color: drawColor, shape: 'freehand' },
+      geometry:{ type:'LineString', coordinates: drawPoints.map(ll => [ll.lng, ll.lat]) }
+    };
+    if (label) layer.bindTooltip(label, { permanent:true, direction:'center', className:'draw-label' });
+    drawnItems.addLayer(layer);
+    saveDrawings();
+  }
+  if (freehandLine) { map.removeLayer(freehandLine); freehandLine = null; }
+  drawPoints = [];
+}
+
 function drawClickHandler(e) {
   if (!drawMode) return;
-  if (measureActive || pinMode) return; // Andere Modi haben Vorrang
+  if (measureActive || pinMode) return;
+  if (drawMode === 'freehand') return; // Freihand nutzt mousedown
   L.DomEvent.stopPropagation(e);
   const ll = e.latlng;
 
   if (drawMode === 'point') {
     const label = prompt('Beschriftung (optional):', '');
-    const m = L.circleMarker(ll, { radius:8, color:'#ffc83d', fillColor:'#ffc83d', fillOpacity:0.85, weight:2 });
-    m.feature = { type:'Feature', properties:{ label: label||'' }, geometry:{ type:'Point', coordinates:[ll.lng, ll.lat] }};
+    const m = L.circleMarker(ll, { radius:8, color:drawColor, fillColor:drawColor, fillOpacity:0.85, weight:2 });
+    m.feature = { type:'Feature', properties:{ label: label||'', color: drawColor }, geometry:{ type:'Point', coordinates:[ll.lng, ll.lat] }};
     if (label) m.bindTooltip(label, { permanent:true, direction:'top', className:'draw-label' });
     drawnItems.addLayer(m);
     saveDrawings();
@@ -5262,12 +5366,8 @@ function drawClickHandler(e) {
   drawPoints.push(ll);
   redrawPreview();
 
-  if (drawMode === 'rect' && drawPoints.length === 2) {
-    finishDrawing();
-  }
-  if (drawMode === 'circle' && drawPoints.length === 2) {
-    finishDrawing();
-  }
+  if (drawMode === 'rect' && drawPoints.length === 2) finishDrawing();
+  if (drawMode === 'circle' && drawPoints.length === 2) finishDrawing();
 }
 
 function drawDblClickHandler(e) {
@@ -5280,7 +5380,7 @@ function drawDblClickHandler(e) {
 function redrawPreview() {
   if (drawPreviewLayer) { map.removeLayer(drawPreviewLayer); drawPreviewLayer = null; }
   if (!drawPoints.length) return;
-  const style = { color:'#ffc83d', weight:3, dashArray:'5 5', fillOpacity:0.2, fillColor:'#ffc83d' };
+  const style = { color:drawColor, weight:3, dashArray:'5 5', fillOpacity:0.2, fillColor:drawColor };
   if (drawMode === 'line') {
     drawPreviewLayer = L.polyline(drawPoints, style).addTo(map);
   } else if (drawMode === 'polygon') {
@@ -5300,7 +5400,7 @@ function finishDrawing() {
     return;
   }
   const label = prompt('Beschriftung für diese Zeichnung (optional):', '') || '';
-  const style = { color:'#ffc83d', weight:3, fillOpacity:0.25, fillColor:'#ffc83d' };
+  const style = { color:drawColor, weight:3, fillOpacity:0.25, fillColor:drawColor };
   let layer;
   let geom;
   if (drawMode === 'line') {
@@ -5316,12 +5416,11 @@ function finishDrawing() {
   } else if (drawMode === 'circle' && drawPoints.length === 2) {
     const r = drawPoints[0].distanceTo(drawPoints[1]);
     layer = L.circle(drawPoints[0], { radius: r, ...style });
-    // Circle als Point mit radius-Property speichern
     geom = { type:'Point', coordinates: [drawPoints[0].lng, drawPoints[0].lat] };
-    layer.feature = { type:'Feature', properties:{ label, radius: r, shape:'circle' }, geometry: geom };
+    layer.feature = { type:'Feature', properties:{ label, color: drawColor, radius: r, shape:'circle' }, geometry: geom };
   }
   if (layer) {
-    if (!layer.feature) layer.feature = { type:'Feature', properties:{ label }, geometry: geom };
+    if (!layer.feature) layer.feature = { type:'Feature', properties:{ label, color: drawColor }, geometry: geom };
     if (label) layer.bindTooltip(label, { permanent:true, direction:'center', className:'draw-label' });
     drawnItems.addLayer(layer);
     saveDrawings();
