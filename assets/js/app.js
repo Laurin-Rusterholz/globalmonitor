@@ -19,6 +19,120 @@ const CONFIG = {
   FIRMS_REFRESH_MS: 30 * 60 * 1000,
 };
 
+/* ════ DIREKT-ANTHROPIC-ZUGRIFF VOM BROWSER ════════════════════════
+   Erlaubt minutenlanges Generieren ohne Netlify 26s-Hardlimit.
+   Schlüssel wird aus localStorage geladen - NICHT im Repo committed
+   (GitHub Push Protection blockt das).
+
+   AKTIVIEREN: einmal in der Browser-Konsole ausführen:
+     localStorage.setItem('gm_anthropic_key', 'sk-ant-api03-DEIN_KEY')
+     location.reload()
+
+   DEAKTIVIEREN (zurück zu Netlify-Backend):
+     localStorage.removeItem('gm_anthropic_key')
+
+   ACHTUNG: Key liegt in localStorage des Browsers. Wer Zugriff auf
+   diesen Browser hat (oder XSS), kann ihn lesen. Nach Verdacht auf
+   Missbrauch immer rotieren auf console.anthropic.com/settings/keys
+═══════════════════════════════════════════════════════════════════ */
+const DIRECT_ANTHROPIC_KEY = (typeof localStorage !== 'undefined' && localStorage.getItem('gm_anthropic_key')) || '';
+const USE_DIRECT_ANTHROPIC = !!DIRECT_ANTHROPIC_KEY && DIRECT_ANTHROPIC_KEY.startsWith('sk-ant-');
+
+async function callAnthropicDirect(reqBody) {
+  if (!USE_DIRECT_ANTHROPIC) throw new Error('Kein Direct-Anthropic-Key gesetzt');
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': DIRECT_ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify(reqBody),
+  });
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); }
+  catch { throw new Error(`Anthropic HTTP ${res.status}: ${text.slice(0,200)}`); }
+  if (!res.ok) {
+    const msg = data.error?.message || data.error?.type || `HTTP ${res.status}`;
+    throw new Error('Anthropic: ' + msg);
+  }
+  return data;
+}
+
+// Aus einer Anthropic-Response Text + (falls vorhanden) Web-Citations extrahieren
+function extractAnthropicResult(data) {
+  const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+  const citations = [];
+  (data.content || []).forEach(b => {
+    if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) {
+      b.content.forEach(c => {
+        if (c.type === 'web_search_result' && c.url) citations.push({ url: c.url, title: c.title || c.url });
+      });
+    }
+  });
+  return { text, citations, stopReason: data.stop_reason, model: data.model };
+}
+
+// JSON aus Modell-Output extrahieren + Repair bei abgeschnittenem Output
+function parseModelJson(text, stopReason) {
+  const m = text.match(/\{[\s\S]*\}/);
+  const jsonText = m ? m[0] : text;
+  try { return { parsed: JSON.parse(jsonText), repaired: false }; }
+  catch (e) {
+    try {
+      const repaired = repairTruncatedJSON(jsonText);
+      return { parsed: JSON.parse(repaired), repaired: true, stopReason };
+    } catch (e2) {
+      throw new Error(`JSON-Parse fehlgeschlagen: ${e.message}${stopReason==='max_tokens'?' (max_tokens hit, Repair fail)':''}`);
+    }
+  }
+}
+
+function repairTruncatedJSON(s) {
+  let trimmed = s.trimEnd();
+  let depth = { brace: 0, bracket: 0 };
+  let inStr = false, esc = false;
+  let lastSafeIdx = -1;
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\') { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{') depth.brace++;
+    else if (c === '}') { depth.brace--; if (depth.brace >= 0 && depth.bracket === 0) lastSafeIdx = i; }
+    else if (c === '[') depth.bracket++;
+    else if (c === ']') { depth.bracket--; if (depth.brace === 0 && depth.bracket === 0) lastSafeIdx = i; }
+    else if (c === ',' && depth.brace === 1 && depth.bracket === 0) lastSafeIdx = i;
+  }
+  if (lastSafeIdx === -1) return trimmed;
+  let head = trimmed.slice(0, lastSafeIdx + 1).replace(/,\s*$/, '');
+  let oBrace = 0, oBracket = 0, ins = false, es = false;
+  for (let i = 0; i < head.length; i++) {
+    const c = head[i];
+    if (es) { es = false; continue; }
+    if (c === '\\') { es = true; continue; }
+    if (c === '"') { ins = !ins; continue; }
+    if (ins) continue;
+    if (c === '{') oBrace++;
+    else if (c === '}') oBrace--;
+    else if (c === '[') oBracket++;
+    else if (c === ']') oBracket--;
+  }
+  while (oBracket > 0) { head += ']'; oBracket--; }
+  while (oBrace > 0) { head += '}'; oBrace--; }
+  return head;
+}
+
+window.USE_DIRECT_ANTHROPIC = USE_DIRECT_ANTHROPIC;
+if (USE_DIRECT_ANTHROPIC) {
+  console.info('%c✅ Direct-Anthropic aktiv (Browser→Anthropic, kein 26s-Limit)', 'color:#30d158;font-weight:600');
+} else {
+  console.info('%c⚠ Direct-Anthropic OFF. Aktivieren:\n  localStorage.setItem("gm_anthropic_key","sk-ant-api03-…");\n  location.reload();', 'color:#ff9f0a');
+}
+
 /* ════ STATE PERSISTENCE (localStorage + URL hash) ════ */
 const STATE_KEY = 'gm_state_v1';
 function loadState() {
@@ -2965,25 +3079,146 @@ function renderDossierGenTab(body) {
   });
 }
 
+// Direct-Browser-Call zu Anthropic für Land-Dossier.
+// deep=true → Sonnet 4.6 + Web-Suche, max_tokens 14000, 350-550 Wörter/Sektion
+// deep=false → Sonnet 4.6, max_tokens 6000, 200-350 Wörter/Sektion
+const DOSSIER_SECTIONS = {
+  full: ['profile', 'economy', 'industries', 'trade', 'military', 'doctrine', 'regionalRole', 'globalRole', 'hotspots'],
+  trade: ['economy', 'industries', 'trade'],
+  military: ['military', 'doctrine', 'hotspots'],
+  role: ['regionalRole', 'globalRole'],
+};
+const DOSSIER_SECTION_LABELS = {
+  profile: 'Politisches Profil', economy: 'Wirtschaft', industries: 'Kernindustrien',
+  trade: 'Handelspartner & Verflechtungen', military: 'Militärische Stärke',
+  doctrine: 'Militärische Doktrin', regionalRole: 'Rolle in der Region',
+  globalRole: 'Globale Rolle', hotspots: 'Aktuelle Brennpunkte',
+};
+async function generateDossierDirect(iso, countryName, scope, context, deep) {
+  const sections = DOSSIER_SECTIONS[scope] || DOSSIER_SECTIONS.full;
+  const wordsPerSection = deep ? '350-550 Wörter' : (scope === 'full' ? '200-300 Wörter' : '280-400 Wörter');
+  const maxTokens = deep ? 14000 : (scope === 'full' ? 7000 : 4500);
+
+  const sys = `Du bist Senior-Geopolitik-Analyst${deep ? ' mit Web-Zugriff' : ''}. ${deep ? 'Recherchiere im Web aktuelle Zahlen/Programme/Beschlüsse (mind. 5-8 verschiedene Suchen). ' : ''}Liefere AUSSCHLIESSLICH JSON:
+
+{
+  "summary": "${deep ? '4-6' : '3-4'} Sätze Charakterisierung mit Spannungsfeldern",
+  "sections": {
+    ${sections.map(k => `"${k}": "Markdown. ${wordsPerSection}. Konkret mit Zahlen (BIP, Truppen, Budgets, %, Volumen), Namen (Personen, Programme), Daten (Beschlüsse, Wahlen, Verträge)."`).join(',\n    ')}
+  },
+  "keyFacts": {
+    "industries": ["${deep ? '6-10' : '4-7'} Kernindustrien mit BIP-Anteil"],
+    "tradePartners": {"export":["${deep ? '6-10' : '4-7'} Hauptexportpartner mit Volumen/%"],"import":["${deep ? '6-10' : '4-7'} Hauptimportpartner"]},
+    "militaryActive": "aktive Soldaten + Reserve",
+    "militaryBudget": "USD + % vom BIP",
+    "nuclearWeapons": "ja|nein|wahrscheinlich (mit Sprengkopf-Zahl)",
+    "majorAllies": ["${deep ? '6-10' : '4-7'} Verbündete"],
+    "majorAdversaries": ["${deep ? '4-6' : '3-5'} Hauptgegner"],
+    "keyNumbers": [{"metric":"...","value":"...","year":"...","context":"...${deep ? '","source":"...' : ''}"}]
+  },
+  "recentEvents": [{"date":"YYYY-MM","event":"konkret","impact":"..."${deep ? ',"source":"Web-Quelle"' : ''}}],
+  ${deep ? `"futureScenarios": [{"name":"...","probability":"high|medium|low","timeline":"...","description":"3-5 Sätze","drivers":["3-5"]}],
+  "monitoringIndicators": [{"indicator":"...","currentValue":"...","threshold":"..."}],` : ''}
+  "confidence": "high|medium|low",
+  "sourceNote": "Wissensstand-Hinweis"
+}
+
+Mindestens ${deep ? '12-18' : '6-10'} keyNumbers, ${deep ? '8-12' : '5-8'} recentEvents${deep ? ', 3-5 futureScenarios' : ''}.
+KEINE generischen Aussagen. IMMER konkret mit Zahlen.
+Auf Deutsch. Kompaktes JSON.`;
+
+  const userMsg = `Land: ${countryName} (${iso})
+
+Sektionen: ${sections.map(k => `${k} (${DOSSIER_SECTION_LABELS[k]})`).join(', ')}
+
+Kontext (Wikidata + World Bank):
+${JSON.stringify(context, null, 2)}
+
+Liefere das vollständige JSON-Dossier. Sei ausführlich.`;
+
+  const reqBody = {
+    model: 'claude-sonnet-4-6',
+    max_tokens: maxTokens,
+    system: sys,
+    messages: [{ role: 'user', content: userMsg }],
+  };
+  if (deep) {
+    reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }];
+  }
+
+  const apiData = await callAnthropicDirect(reqBody);
+  const { text, citations, stopReason, model } = extractAnthropicResult(apiData);
+  if (!text) throw new Error('Leere KI-Antwort');
+  const { parsed, repaired } = parseModelJson(text, stopReason);
+
+  parsed.iso = iso;
+  parsed.countryName = countryName;
+  parsed.scope = scope;
+  parsed.generated = new Date().toISOString();
+  parsed.model = model || reqBody.model;
+  parsed.webSearchUsed = deep;
+  parsed.deepDossier = deep;
+  parsed.directBrowser = true;
+  if (citations.length) parsed.webSources = citations.slice(0, 30);
+  if (repaired) parsed.jsonRepaired = true;
+  return parsed;
+}
+
 async function generateDossierIn(iso, name, scope, deep = false) {
   const target = document.getElementById('cdDossierResult');
   if (!target) return;
   const ctx = { profile: dossierState.profile, live: dossierState.live, economic: dossierState.economic };
 
+  // Direct-Browser-Modus: ein Sonnet-Call ohne Netlify-Limit
+  if (USE_DIRECT_ANTHROPIC) {
+    target.innerHTML = `<div style="padding:30px;text-align:center;color:var(--ink-dim)">
+      <div style="font-size:24px;margin-bottom:10px">${deep ? '🔬' : '🤖'}</div>
+      Claude generiert ${deep ? 'Tiefendossier mit Web-Recherche' : scope+'-Dossier'} für ${escapeHtml(name)}…<br>
+      <small style="font-size:11px;color:var(--ink-faint)">Sonnet 4.6 direkt vom Browser${deep ? ' + 8× Web-Suche' : ''}, ohne Netlify-Limit</small>
+      <div id="cdDeepProgress" style="margin-top:15px;color:var(--accent);font-size:12px">… startet</div>
+    </div>`;
+    const startedAt = Date.now();
+    const prog = setInterval(() => {
+      const p = document.getElementById('cdDeepProgress');
+      if (p) p.textContent = `… läuft (${Math.round((Date.now()-startedAt)/1000)}s)`;
+    }, 2000);
+    try {
+      const d = await generateDossierDirect(iso, name, scope, ctx, deep);
+      clearInterval(prog);
+      renderInlineDossier(target, d);
+      toast(`${deep ? '🔬 Tiefendossier' : 'Dossier'} fertig${d.webSources?.length ? ' (' + d.webSources.length + ' Web-Quellen)' : ''}`);
+      // Auto-save: als Notiz in Netlify Blobs (falls verfügbar)
+      try {
+        await fetch(`${CONFIG.BACKEND_BASE}/notes`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            iso, title: `${deep ? '🔬 Tiefendossier' : 'AI-Dossier'} ${scope}: ${name}`,
+            content: JSON.stringify(d, null, 2),
+            type: 'ai-dossier', tags: ['ai', scope, ...(deep?['deep','web']:[])],
+            dossier: d
+          })
+        }).catch(()=>{});
+      } catch {}
+      loadNotesForCountry(iso);
+    } catch (e) {
+      clearInterval(prog);
+      target.innerHTML = `<div style="padding:20px;color:var(--conflict)">Fehler: ${escapeHtml(e.message)}</div>`;
+    }
+    return;
+  }
+
+  // FALLBACK: Netlify-Backend (wenn kein Direct-Key)
   if (deep) {
-    // BACKGROUND: Tiefendossier mit Web-Recherche, polling bis 5 min
     target.innerHTML = `<div style="padding:30px;text-align:center;color:var(--ink-dim)">
       <div style="font-size:24px;margin-bottom:10px">🔬</div>
-      <b>Tiefendossier mit Web-Recherche</b> für ${escapeHtml(name)}…<br>
-      <small style="font-size:11px;color:var(--ink-faint)">Sonnet 4.6 + 8× Web-Suche · 350-550 Wörter pro Sektion · Dauert 1-5 min</small>
+      <b>Tiefendossier mit Web-Recherche</b> für ${escapeHtml(name)}… (Background)<br>
       <div id="cdDeepProgress" style="margin-top:15px;color:var(--accent);font-size:12px">… startet</div>
     </div>`;
     try {
       const d = await window.runBackgroundJob('dossier', {
         iso, countryName: name, scope, context: ctx, webSearch: true, save: true
       }, {
-        maxWaitSec: 300, // 5 Min
-        pollIntervalMs: 4000,
+        maxWaitSec: 300, pollIntervalMs: 4000,
         onProgress: (i) => {
           const p = document.getElementById('cdDeepProgress');
           if (p) p.textContent = `… Web-Recherche läuft (${Math.round(i * 4)}s)`;
@@ -2994,21 +3229,13 @@ async function generateDossierIn(iso, name, scope, deep = false) {
       toast(`🔬 Tiefendossier fertig${d.webSources?.length ? ' (' + d.webSources.length + ' Web-Quellen)' : ''}`);
       loadNotesForCountry(iso);
     } catch (e) {
-      target.innerHTML = `<div style="padding:20px;color:var(--conflict)">
-        <b>Tiefendossier-Fehler:</b> ${escapeHtml(e.message)}<br>
-        <small style="color:var(--ink-faint);margin-top:8px;display:block">
-          Falls Background-Mode nicht klappt: NETLIFY_API_TOKEN + NETLIFY_SITE_ID in Netlify Env Vars setzen.
-        </small>
-      </div>`;
+      target.innerHTML = `<div style="padding:20px;color:var(--conflict)">Tiefendossier-Fehler: ${escapeHtml(e.message)}</div>`;
     }
     return;
   }
-
-  // SYNC (schnell, <22s)
   target.innerHTML = `<div style="padding:30px;text-align:center;color:var(--ink-dim)">
     <div style="font-size:24px;margin-bottom:10px">⏳</div>
-    Claude generiert ${scope}-Dossier für ${escapeHtml(name)}…<br>
-    <small style="font-size:10px;color:var(--ink-faint)">Sonnet 4.6, ~15-22s. Für mehr Tiefe + Web-Recherche → 🔬 Tiefendossier.</small>
+    Claude generiert ${scope}-Dossier für ${escapeHtml(name)}… (Netlify)
   </div>`;
   try {
     const res = await fetch(`${CONFIG.BACKEND_BASE}/dossier`, {
@@ -3024,11 +3251,7 @@ async function generateDossierIn(iso, name, scope, deep = false) {
     toast('Dossier gespeichert');
     loadNotesForCountry(iso);
   } catch (e) {
-    const errMsg = e.message || String(e);
-    const hint = /504|timeout|aborted/i.test(errMsg)
-      ? '<br><small style="color:var(--ink-faint);margin-top:8px;display:block">→ Bitte 🔬 Tiefendossier + Web nutzen (läuft im Hintergrund, kein Timeout-Limit).</small>'
-      : '';
-    target.innerHTML = `<div style="padding:20px;color:var(--conflict)">Fehler: ${escapeHtml(errMsg)}${hint}</div>`;
+    target.innerHTML = `<div style="padding:20px;color:var(--conflict)">Fehler: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -3378,8 +3601,15 @@ async function generateDossier(iso, countryName, scope, deep = false) {
     ? document.getElementById('dosDeep')
     : document.querySelector(`button[data-scope="${scope}"]:not(#dosDeep)`);
   const orig = btn?.textContent;
-  if (btn) { btn.disabled = true; btn.textContent = deep ? '… 🔬 Web-Recherche' : '… AI generiert'; }
-  toast(`${deep ? '🔬 Tiefendossier (1-5 min)' : 'AI ' + scope + '-Dossier'} für ${countryName}…`);
+  if (btn) { btn.disabled = true; btn.textContent = deep ? '… 🔬 Web' : '… AI'; }
+  toast(`${deep ? '🔬 Tiefendossier' : 'AI ' + scope + '-Dossier'} für ${countryName}…`);
+  const startedAt = Date.now();
+  let progInt = null;
+  if (USE_DIRECT_ANTHROPIC) {
+    progInt = setInterval(() => {
+      if (btn) btn.textContent = `… ${deep ? '🔬 Web ' : ''}${Math.round((Date.now()-startedAt)/1000)}s`;
+    }, 2000);
+  }
   try {
     const ctx = {
       profile: currentRegion?.profile,
@@ -3387,15 +3617,27 @@ async function generateDossier(iso, countryName, scope, deep = false) {
       economic: currentRegion?.economic,
     };
     let data;
-    if (deep) {
+    if (USE_DIRECT_ANTHROPIC) {
+      // Direct-Browser: kein Netlify-Limit, Sonnet 4.6 + ggf. Web
+      data = await generateDossierDirect(iso, countryName, scope, ctx, deep);
+      // Speichern als Notiz best-effort
+      try {
+        await fetch(`${CONFIG.BACKEND_BASE}/notes`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            iso, title: `${deep ? '🔬 Tiefendossier' : 'AI-Dossier'} ${scope}: ${countryName}`,
+            content: JSON.stringify(data, null, 2),
+            type: 'ai-dossier', tags: ['ai', scope, ...(deep?['deep','web']:[])],
+            dossier: data
+          })
+        }).catch(()=>{});
+      } catch {}
+    } else if (deep) {
       data = await window.runBackgroundJob('dossier', {
         iso, countryName, scope, context: ctx, webSearch: true, save: true
       }, {
-        maxWaitSec: 300,
-        pollIntervalMs: 4000,
-        onProgress: (i) => {
-          if (btn) btn.textContent = `… 🔬 Web ${Math.round(i * 4)}s`;
-        }
+        maxWaitSec: 300, pollIntervalMs: 4000,
+        onProgress: (i) => { if (btn) btn.textContent = `… 🔬 ${Math.round(i * 4)}s`; }
       });
     } else {
       const res = await fetch(`${CONFIG.BACKEND_BASE}/dossier`, {
@@ -3413,9 +3655,9 @@ async function generateDossier(iso, countryName, scope, deep = false) {
     else openDocumentInline(data);
   } catch (e) {
     const errMsg = e.message || String(e);
-    const isTimeout = /504|timeout|aborted/i.test(errMsg);
-    toast(`${deep ? '🔬 ' : ''}Dossier fehlgeschlagen: ${errMsg}${!deep && isTimeout ? ' → 🔬 Tiefendossier+Web nutzen' : ''}`);
+    toast(`${deep ? '🔬 ' : ''}Dossier fehlgeschlagen: ${errMsg}`);
   }
+  if (progInt) clearInterval(progInt);
   if (btn) { btn.disabled = false; btn.textContent = orig; }
 }
 
@@ -5446,6 +5688,70 @@ function formatAnalysisAsMarkdown(data) {
   return md.trim();
 }
 
+// Direkt-Browser-Call zu Anthropic für Projekt-Analyse.
+// Bei deep=true: Sonnet 4.6 + Web (10 Uses), max_tokens 12000, sehr ausführlich.
+// Bei deep=false: Sonnet 4.6, max_tokens 6000, ohne Web (schneller).
+async function runProjectAnalysisDirect({ thesis, baseCountries = [], recentEvents = [], deep = true }) {
+  const eventsCtx = recentEvents.length
+    ? `\n\nLIVE-EREIGNISSE:\n${recentEvents.slice(0, 30).map(e => '- ' + e).join('\n')}`
+    : '';
+
+  const sys = `Du bist Senior-Geopolitik-Analyst${deep ? ' mit Web-Zugriff' : ''}. ${deep ? 'Recherchiere im Web aktuelle Zahlen, Daten, Programme (mindestens 5-8 unterschiedliche Suchen). ' : ''}Liefere AUSSCHLIESSLICH ein vollständiges JSON:
+
+{
+  "summary": "${deep ? '5-8' : '3-5'} Sätze: Kontext + Spannungsfelder + aktueller Stand",
+  "thesisStrength": "high|medium|low",
+  "thesisAssessment": "${deep ? '3-5' : '2-3'} Sätze: Begründung",
+  "countries": [{"iso":"DE","role":"primary|secondary|target|beneficiary|loser|bystander","intensity":"high|medium|low","reason":"${deep ? '3-4' : '2-3'} Sätze mit Zahlen","currentActivities":["${deep ? '5-8' : '3-5'} konkrete Aktivitäten mit Datum/Programm"],"capacities":"${deep ? '2-3' : '1-2'} Sätze mit Zahlen","stake":"konkret"${deep ? ',"sources":["max 3 Web-Quellen"]' : ''}}],
+  "actors": [{"name":"...","type":"alliance|state|ngo|company|individual|other","role":"${deep ? '2-3' : '1-2'} Sätze","stake":"konkret","capabilities":["${deep ? '5-8' : '3-4'} Fähigkeiten mit Zahlen"],"recentActions":["${deep ? '5-8' : '3-4'} jüngste Aktionen mit Datum"]${deep ? ',"sources":["max 3 Quellen"]' : ''}}],
+  "pastActivities": [{"date":"YYYY-MM","event":"konkret mit Zahlen","actor":"...","impact":"..."${deep ? ',"source":"Web-Quelle"' : ''}}],
+  "currentCapacities": {"military":"mit Zahlen","economic":"mit Zahlen","political":"...","infrastructure":"mit Zahlen"},
+  "keyNumbers": [{"metric":"...","value":"...","year":"...","context":"...${deep ? '","source":"...' : ''}"}],
+  "contextHints": ["${deep ? '12-18' : '8-12'} Kontext-Punkte mit Daten/Zahlen"],
+  "futureScenarios": [{"name":"...","probability":"high|medium|low","timeline":"...","description":"${deep ? '5-8' : '3-5'} Sätze","drivers":["${deep ? '5-8' : '3-4'} Treiber"],"blockers":["${deep ? '3-5' : '2-3'}"],"indicators":["${deep ? '5-8' : '3-4'} Indikatoren mit Schwellwerten"]}],
+  "monitoringIndicators": [{"indicator":"...","currentValue":"...","threshold":"...","frequency":"..."}],
+  "openQuestions": ["${deep ? '12-18' : '8-12'} präzise Fragen, je 1-2 Sätze"],
+  "criticalGaps": ["${deep ? '8-12' : '5-8'} Informationslücken"],
+  "actionableRecommendations": ["${deep ? '6-10' : '4-6'} konkrete Recherche-Schritte"]
+}
+
+WICHTIG:
+- ISO 2-Buchstaben, Länder max ${deep ? '25' : '20'}, Akteure max ${deep ? '10' : '8'}.
+- pastActivities max ${deep ? '12' : '8'}, keyNumbers max ${deep ? '18' : '12'}, futureScenarios max ${deep ? '6' : '4'}.
+- NIE generische Aussagen, IMMER Zahlen/Programme/Beschlüsse.
+- Auf Deutsch antworten.
+- Kompaktes JSON ohne unnötige Whitespaces.`;
+
+  const userMsg = `These: "${thesis}"
+${baseCountries.length ? `Basis-Länder: ${baseCountries.join(', ')}` : ''}${eventsCtx}
+
+Liefere das vollständige JSON-Dossier. Sei ausführlich.`;
+
+  const reqBody = {
+    model: 'claude-sonnet-4-6',
+    max_tokens: deep ? 12000 : 6000,
+    system: sys,
+    messages: [{ role: 'user', content: userMsg }],
+  };
+  if (deep) {
+    reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 10 }];
+  }
+
+  const apiData = await callAnthropicDirect(reqBody);
+  const { text, citations, stopReason, model } = extractAnthropicResult(apiData);
+  if (!text) throw new Error('Leere KI-Antwort');
+  const { parsed, repaired } = parseModelJson(text, stopReason);
+
+  parsed.generated = new Date().toISOString();
+  parsed.model = model || reqBody.model;
+  parsed.webSearchUsed = deep;
+  parsed.deepAnalysis = deep;
+  parsed.directBrowser = true;
+  if (citations.length) parsed.webSources = citations.slice(0, 30);
+  if (repaired) parsed.jsonRepaired = true;
+  return parsed;
+}
+
 async function runProjectAnalysis(forceWeb = false, deepMode = false) {
   if (!activeProject) return;
   const btn = document.getElementById(deepMode ? 'deepAnalysis' : 'rerunAnalysis');
@@ -5462,24 +5768,37 @@ async function runProjectAnalysis(forceWeb = false, deepMode = false) {
   let data = null;
   let bgErr = null;
 
-  // DEEP MODE: direkt Background mit Web-Suche, langes Polling (5 min)
+  // DEEP MODE: Direct-Anthropic vom Browser wenn Key gesetzt (kein Limit),
+  // sonst Background-Function als Fallback.
   if (deepMode) {
-    toast('🔬 Tiefenanalyse läuft (Web-Recherche, 1-5 min)…');
+    toast('🔬 Tiefenanalyse läuft (Sonnet 4.6 + Web-Recherche)…');
     if (btn) btn.textContent = '… Web-Recherche';
+    const startedAt = Date.now();
+    const progressInterval = setInterval(() => {
+      if (btn) btn.textContent = `… Sonnet + Web ${Math.round((Date.now()-startedAt)/1000)}s`;
+    }, 2000);
     try {
-      data = await window.runBackgroundJob('projectanalyze', {
-        thesis: activeProject.thesis,
-        baseCountries: activeProject.countries,
-        webSearch: true,
-        recentEvents
-      }, {
-        maxWaitSec: 300, // 5 Minuten - genug für 10x Web-Search + Sonnet
-        pollIntervalMs: 4000,
-        onProgress: (i) => {
-          if (btn) btn.textContent = `… Web ${Math.round(i * 4)}s`;
-        }
-      });
+      if (USE_DIRECT_ANTHROPIC) {
+        data = await runProjectAnalysisDirect({
+          thesis: activeProject.thesis,
+          baseCountries: activeProject.countries,
+          recentEvents,
+          deep: true,
+        });
+      } else {
+        data = await window.runBackgroundJob('projectanalyze', {
+          thesis: activeProject.thesis,
+          baseCountries: activeProject.countries,
+          webSearch: true,
+          recentEvents
+        }, {
+          maxWaitSec: 300,
+          pollIntervalMs: 4000,
+          onProgress: (i) => { if (btn) btn.textContent = `… Web ${Math.round(i * 4)}s`; }
+        });
+      }
     } catch (e) {
+      clearInterval(progressInterval);
       bgErr = e;
       console.warn('Tiefenanalyse fehlgeschlagen:', e.message);
       toast('Tiefenanalyse fehlgeschlagen: ' + e.message.slice(0, 80));
@@ -5488,10 +5807,38 @@ async function runProjectAnalysis(forceWeb = false, deepMode = false) {
       if (otherBtn) otherBtn.disabled = false;
       return;
     }
+    clearInterval(progressInterval);
     // → springt unten zur Verarbeitung
+  } else if (USE_DIRECT_ANTHROPIC) {
+
+  // SCHNELL-MODUS DIRECT: Ein Sonnet-Call vom Browser direkt (kein Split nötig, kein 26s-Limit)
+  toast('KI analysiert These (Sonnet 4.6 direkt)…');
+  if (btn) btn.textContent = '… Sonnet';
+  const startedAt = Date.now();
+  const progInt = setInterval(() => {
+    if (btn) btn.textContent = `… Sonnet ${Math.round((Date.now()-startedAt)/1000)}s`;
+  }, 2000);
+  try {
+    data = await runProjectAnalysisDirect({
+      thesis: activeProject.thesis,
+      baseCountries: activeProject.countries,
+      recentEvents,
+      deep: false,
+    });
+  } catch (e) {
+    clearInterval(progInt);
+    toast('Analyse fehlgeschlagen: ' + e.message.slice(0,80));
+    showProjectAnalysisError(e.message, null, null);
+    if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Schnell-Analyse'; }
+    if (otherBtn) otherBtn.disabled = false;
+    return;
+  }
+  clearInterval(progInt);
+  // → springt unten zur Verarbeitung
+
   } else {
 
-  // SCHNELL-MODUS: 3-fach Sonnet-Split parallel
+  // SCHNELL-MODUS NETLIFY-FALLBACK: 3-fach Sonnet-Split parallel (wenn kein Direct-Key)
   toast('KI analysiert These (3-fach Sonnet parallel)…');
   if (btn) btn.textContent = '… 3-fach Sonnet';
   const callSection = async (sectionName) => {
