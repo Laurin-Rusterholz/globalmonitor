@@ -543,7 +543,7 @@ body.project-mode #topbar{
 }
 body.project-mode #projectPanel{
   position:absolute; top:0; left:0; right:auto;
-  width:560px; max-width:40vw;
+  width:640px; max-width:48vw;
   border-left:none; border-right:2px solid var(--protest);
   transform:translateX(0);
   box-shadow:20px 0 50px rgba(0,0,0,.65);
@@ -566,10 +566,11 @@ body:not(.project-mode) .proj-mode-indicator{display:none}
 /* Projekt-Toolbar (links unten, nur Projekt-Modus) */
 .proj-toolbar{display:none}
 body.project-mode .proj-toolbar{
-  display:flex; position:absolute; bottom:60px; left:580px; z-index:1100;
+  display:flex; position:absolute; top:60px; left:660px; right:14px; z-index:1100;
   background:rgba(15,20,29,.95); backdrop-filter:blur(10px);
   border:1px solid var(--protest); border-radius:24px;
-  padding:5px 6px; gap:4px; box-shadow:0 8px 24px rgba(0,0,0,.5)
+  padding:5px 8px; gap:5px; box-shadow:0 8px 24px rgba(0,0,0,.5);
+  flex-wrap:wrap; max-width:calc(100vw - 680px); align-items:center
 }
 .ptb-btn{background:var(--panel-2);border:1px solid var(--line-2);color:var(--ink);
   border-radius:18px;padding:6px 12px;cursor:pointer;font-family:inherit;font-size:11px;white-space:nowrap}
@@ -603,7 +604,20 @@ body.project-mode .proj-toolbar{
 .pnd-tag{background:var(--panel-3);border:1px solid var(--line);color:var(--ink-dim);
   border-radius:11px;padding:2px 9px;font-size:9.5px;letter-spacing:.04em}
 
-/* Tooltip auf Notiz-Markern */
+/* Kleine Notiz-Marker mit Label */
+.proj-note-marker-small,.user-note-marker{
+  display:inline-flex;align-items:center;gap:4px;
+  background:rgba(255,200,61,.95);color:#000;
+  border:1px solid rgba(0,0,0,.5);border-radius:11px;
+  padding:2px 8px 2px 4px;font-size:10px;font-weight:600;
+  box-shadow:0 2px 6px rgba(0,0,0,.4);white-space:nowrap;font-family:var(--font-body);
+  cursor:pointer;line-height:1
+}
+.user-note-marker{background:rgba(255,200,61,.85);border-color:rgba(0,0,0,.4);font-size:9.5px}
+.pnm-label,.unm-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px}
+.proj-note-marker-small:hover,.user-note-marker:hover{background:#ffc83d;transform:scale(1.08)}
+
+/* Alter Marker-Style behalten als Fallback */
 .proj-note-marker{position:relative}
 .proj-note-marker-preview{
   position:absolute;bottom:34px;left:50%;transform:translateX(-50%);
@@ -662,6 +676,25 @@ body.project-mode .proj-toolbar{
 .focus-card-name{font-family:var(--font-display);font-size:13px;color:var(--ink)}
 .focus-card-desc{font-size:11px;color:var(--ink-dim);line-height:1.5}
 .focus-card-meta{margin-top:5px;font-size:10px;color:var(--ink-faint)}
+
+/* Sidebar-Projekt-Liste */
+.sb-projects-section{margin-bottom:12px}
+.sb-projects-title{font-size:9.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.1em;
+  padding:6px 4px 4px;display:flex;justify-content:space-between;align-items:center}
+.sb-projects-title button{background:none;border:1px solid var(--line);color:var(--ink-dim);
+  border-radius:5px;padding:2px 7px;cursor:pointer;font-family:inherit;font-size:10px}
+.sb-projects-title button:hover{color:var(--protest);border-color:var(--protest)}
+.sb-proj-item{background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--protest);
+  border-radius:6px;padding:7px 9px;margin-bottom:5px;cursor:pointer;transition:all .15s}
+.sb-proj-item.archived{border-left-color:var(--ink-faint);opacity:.7}
+.sb-proj-item:hover{border-color:var(--protest);transform:translateX(2px)}
+.sb-proj-name{font-family:var(--font-display);font-size:11.5px;color:var(--ink);line-height:1.3}
+.sb-proj-meta{font-size:9px;color:var(--ink-faint);margin-top:2px;letter-spacing:.04em}
+.sb-proj-actions{display:flex;gap:3px;margin-top:4px}
+.sb-proj-actions button{background:none;border:1px solid var(--line);color:var(--ink-dim);
+  border-radius:3px;padding:1px 5px;cursor:pointer;font-family:inherit;font-size:9px}
+.sb-proj-actions button:hover{color:var(--protest);border-color:var(--protest)}
+.sb-projects-empty{padding:8px 6px;font-size:10px;color:var(--ink-faint);font-style:italic}
 
 /* Dashboard-Stats für Projekt */
 .proj-dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:7px;margin-bottom:14px}

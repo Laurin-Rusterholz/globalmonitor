@@ -62,11 +62,13 @@ exports.handler = async (event) => {
         iso,
         title: String(body.title).slice(0, 200),
         content: String(body.content || ''),
-        type: body.type || 'manual', // manual | ai-dossier | ai-snapshot
+        type: body.type || 'manual',
         tags: body.tags || [],
         created: new Date().toISOString(),
         updated: new Date().toISOString(),
       };
+      if (typeof body.la === 'number') note.la = body.la;
+      if (typeof body.lo === 'number') note.lo = body.lo;
       await store.setJSON(id, note);
       return json({ id, ...note });
     }

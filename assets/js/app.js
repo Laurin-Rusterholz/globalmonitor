@@ -368,6 +368,7 @@ const LAYERS = {
   burntAreas:  {n:'Brandflächen (EFFIS/MODIS)', c:'#ff7847', cat:'liveMil', on:false},
   // User Pins
   pins:        {n:'Eigene Pins',            c:'#21c7d6', cat:'user', on:true},
+  userNotes:   {n:'Eigene Notizen',         c:'#ffc83d', cat:'user', on:true},
 };
 
 // LayerGroups initialisieren
@@ -512,8 +513,10 @@ function toggleLayer(key, el) {
     if (key === 'burntAreas') activateBurntAreas();
     if (key === 'politicalMap') activatePoliticalMap();
     if (key === 'allianceMap') activateAllianceMap();
+    if (key === 'userNotes') { map.addLayer(userNoteMarkers); refreshUserNoteMarkers(); }
   } else {
     map.removeLayer(l.group);
+    if (key === 'userNotes') map.removeLayer(userNoteMarkers);
     if (key === 'planes') stopPlanes();
     if (key === 'planesMil') stopMilPlanes();
     if (key === 'ships') stopShips();
@@ -551,8 +554,9 @@ function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
     if (EVENT_TYPES.has(sourceKey)) {
       // Event-Popup mit Analyse-Buttons
       actions = `<div class="popup-actions">
-        <button onclick="window.analyzeEvent('${sourceKey}',${lat},${lng},'${safeTitle}',false)">💬 Analyse</button>
-        <button onclick="window.analyzeEvent('${sourceKey}',${lat},${lng},'${safeTitle}',true)">🔍 Web-Recherche</button>
+        <button onclick="window.analyzeEvent('${sourceKey}',${lat},${lng},'${safeTitle}',false)">💬 KI</button>
+        <button onclick="window.openWebsearch('${safeTitle}','news')" title="Google-Suche mit News-Quellen">🌐 Web</button>
+        <button onclick="window.analyzeEvent('${sourceKey}',${lat},${lng},'${safeTitle}',true)">🔍 KI+Web</button>
         <button onclick="window.analyzeProfiteers('${sourceKey}',${lat},${lng},'${safeTitle}')">💰 Profiteure</button>
         <button onclick="window.askAboutRegion(${lat},${lng},'${safeTitle}')">📋 Region</button>
       </div>`;
@@ -572,6 +576,21 @@ function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
 }
 
 // Event-Analyse-Funktionen
+// Web-Suche mit Operatoren - öffnet neuen Tab
+window.openWebsearch = function(query, scope = 'news') {
+  let q = `"${query}"`;
+  if (scope === 'news') {
+    q += ` (site:reuters.com OR site:bbc.com OR site:tagesschau.de OR site:nzz.ch OR site:dw.com OR site:aljazeera.com)`;
+  } else if (scope === 'osint') {
+    q += ` (site:bellingcat.com OR site:understandingwar.org OR site:longwarjournal.org OR site:csis.org OR site:rusi.org)`;
+  } else if (scope === 'recent') {
+    const lastMonth = new Date(Date.now() - 30*86400000).toISOString().slice(0,10);
+    q += ` after:${lastMonth}`;
+  }
+  const url = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+  window.open(url, '_blank', 'noopener');
+};
+
 window.analyzeEvent = async function(type, lat, lng, title, useWebSearch) {
   map.closePopup();
   // Sidemenu öffnen mit Region
@@ -2576,6 +2595,7 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(item => {
       }
       case 'note': {
         // Kontextabhängig: Im Projekt-Modus → Projekt-Notiz, sonst → Country-Notiz
+        // Übergibt exakte Koordinaten an die Notiz
         try {
           const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=5&accept-language=de`);
           const d = await r.json();
@@ -2583,11 +2603,11 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(item => {
           const name = d.address?.country || iso;
           if (!iso) return toast('Kein Land an dieser Stelle');
           if (activeProject) {
-            openProjectNoteModal(iso, name);
-            toast('Projekt-Notiz für ' + name);
+            openProjectNoteModal(iso, name, {lat, lng});
+            toast('Projekt-Notiz an exakter Position für ' + name);
           } else {
-            openNoteModal(iso, name);
-            toast('Notiz für ' + name);
+            openNoteModal(iso, name, {lat, lng});
+            toast('Notiz an exakter Position für ' + name);
           }
         } catch { toast('Land-Erkennung fehlgeschlagen'); }
         break;
@@ -3241,7 +3261,7 @@ function markdownish(text) {
     .replace(/^/, '<p>').concat('</p>');
 }
 
-function openNoteModal(iso, countryName) {
+function openNoteModal(iso, countryName, latlng = null) {
   const modal = document.getElementById('noteEditModal');
   document.getElementById('noteEditTitle').textContent = `Notiz · ${countryName}`;
   document.getElementById('noteEditTitleInput').value = '';
@@ -3249,6 +3269,8 @@ function openNoteModal(iso, countryName) {
   document.getElementById('noteEditTags').value = '';
   modal.dataset.iso = iso;
   modal.dataset.country = countryName;
+  modal.dataset.la = latlng ? latlng.lat : '';
+  modal.dataset.lo = latlng ? latlng.lng : '';
   openModal('noteEditModal');
   setTimeout(() => document.getElementById('noteEditTitleInput').focus(), 100);
 }
@@ -3256,20 +3278,33 @@ function openNoteModal(iso, countryName) {
 async function saveNote() {
   const modal = document.getElementById('noteEditModal');
   const iso = modal.dataset.iso;
+  const la = parseFloat(modal.dataset.la);
+  const lo = parseFloat(modal.dataset.lo);
   const title = document.getElementById('noteEditTitleInput').value.trim();
   const content = document.getElementById('noteEditContent').value.trim();
   const tags = document.getElementById('noteEditTags').value.split(',').map(t=>t.trim()).filter(Boolean);
   if (!title) return toast('Titel nötig');
+  const payload = { iso, title, content, type:'manual', tags };
+  if (!isNaN(la) && !isNaN(lo)) { payload.la = la; payload.lo = lo; }
   try {
     const res = await fetch(`${CONFIG.BACKEND_BASE}/notes`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ iso, title, content, type:'manual', tags })
+      body: JSON.stringify(payload)
     });
     if (!res.ok) throw new Error('HTTP '+res.status);
     toast('Notiz gespeichert');
     modal.classList.remove('open');
     loadNotesForCountry(iso);
-  } catch (e) { toast('Speichern fehlgeschlagen: '+e.message); }
+    refreshUserNoteMarkers();
+  } catch (e) {
+    // localStorage-Fallback wenn Backend failt
+    const lsNotes = JSON.parse(localStorage.getItem('gm_local_notes') || '[]');
+    lsNotes.unshift({ ...payload, id: 'local_'+Date.now(), created: new Date().toISOString() });
+    localStorage.setItem('gm_local_notes', JSON.stringify(lsNotes));
+    toast('Notiz lokal gespeichert (Backend offline)');
+    modal.classList.remove('open');
+    refreshUserNoteMarkers();
+  }
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -3605,6 +3640,13 @@ document.getElementById('webSearchToggle')?.addEventListener('click', (e) => {
   window._webSearchPersistent = !window._webSearchPersistent;
   e.currentTarget.classList.toggle('active', window._webSearchPersistent);
   toast(window._webSearchPersistent ? '🔍 Online-Recherche dauerhaft aktiv' : 'Online-Recherche aus');
+});
+// Google-Suche-Button: aktuelle Frage + Region als Google-Query
+document.getElementById('googleBtn')?.addEventListener('click', () => {
+  const q = document.getElementById('askInput').value.trim();
+  const region = currentRegion?.name || '';
+  if (!q && !region) return toast('Frage eingeben oder Region wählen');
+  window.openWebsearch(q || region + ' aktuell', 'news');
 });
 
 /* ════════════════════════════════════════════════════════════════
@@ -4062,6 +4104,7 @@ document.getElementById('newProjCreate')?.addEventListener('click', async () => 
     const project = await apiCreateProject({ name, thesis, countries });
     document.getElementById('newProjectModal').classList.remove('open');
     toast(project.storage === 'localStorage' ? 'Projekt lokal erstellt' : 'Projekt erstellt');
+    if (window._refreshSidebarProjects) window._refreshSidebarProjects();
     await loadProject(project.id);
     // KI-Analyse anstoßen
     runProjectAnalysis();
@@ -4073,6 +4116,61 @@ document.getElementById('newProjCreate')?.addEventListener('click', async () => 
 
 // Projekt-Notiz-Marker auf Karte (Layer-Group)
 let projectNoteMarkers = L.layerGroup();
+
+// User-Notiz-Marker (ALLE Notizen, auch außerhalb Projekt, immer sichtbar)
+let userNoteMarkers = L.layerGroup();
+
+async function refreshUserNoteMarkers() {
+  userNoteMarkers.clearLayers();
+  // Aus Backend laden
+  let allNotes = [];
+  if (CONFIG.USE_BACKEND) {
+    try {
+      const r = await fetch(`${CONFIG.BACKEND_BASE}/notes`);
+      if (r.ok) {
+        const d = await r.json();
+        allNotes = (d.notes || []).filter(n => n.type === 'manual');
+      }
+    } catch {}
+  }
+  // localStorage-Notizen ergänzen
+  try {
+    const lsNotes = JSON.parse(localStorage.getItem('gm_local_notes') || '[]');
+    allNotes = [...allNotes, ...lsNotes];
+  } catch {}
+  // Marker setzen - nur Notizen mit Koordinaten
+  allNotes.forEach(n => {
+    let coords;
+    if (typeof n.la === 'number' && typeof n.lo === 'number') {
+      coords = [n.la, n.lo];
+    } else {
+      coords = R?.countryCenters?.[n.iso];
+      if (!coords) return;
+    }
+    const flag = flagEmoji(n.iso);
+    const titleSnippet = (n.title || 'Notiz').slice(0, 22);
+    const icon = L.divIcon({
+      className: '',
+      html: `<div class="user-note-marker" title="${escapeHtml(n.title||'')}">${flag}<span class="unm-label">${escapeHtml(titleSnippet)}</span></div>`,
+      iconSize: [90, 20],
+      iconAnchor: [45, 20]
+    });
+    const marker = L.marker(coords, { icon });
+    marker.bindPopup(`
+      <div class="pnp-head">
+        <span class="pnp-flag">${flag}</span>
+        <span class="pnp-name">${escapeHtml(window.getCountryProfile?.(n.iso)?.name || n.iso)}</span>
+        <span style="color:var(--ink-faint);font-size:10px">${new Date(n.created).toLocaleString('de-CH',{dateStyle:'short',timeStyle:'short'})}</span>
+      </div>
+      <div class="pnp-note">
+        <div class="pnp-note-title">${escapeHtml(n.title || 'Notiz')}</div>
+        <div class="pnp-note-content">${escapeHtml((n.content||'').slice(0, 400))}</div>
+      </div>
+      ${n.tags?.length ? `<div style="margin-top:4px;font-size:9px;color:var(--ink-faint)">${n.tags.map(t=>'#'+escapeHtml(t)).join(' ')}</div>` : ''}
+    `, { className: 'proj-note-popup' });
+    userNoteMarkers.addLayer(marker);
+  });
+}
 
 async function loadProject(id) {
   try {
@@ -4109,41 +4207,61 @@ function renderProjectNoteMarkers() {
   projectNoteMarkers.clearLayers();
   if (!activeProject?.countryNotes) return;
   if (!map.hasLayer(projectNoteMarkers)) map.addLayer(projectNoteMarkers);
+  // Pro Notiz EINEN eigenen Marker an exakter Position (oder Country-Center als Fallback)
   Object.entries(activeProject.countryNotes).forEach(([iso, notes]) => {
     if (!notes?.length) return;
-    const coords = R?.countryCenters?.[iso];
-    if (!coords) return;
-    const flag = flagEmoji(iso);
-    const cName = window.getCountryProfile?.(iso)?.name || iso;
-    const icon = L.divIcon({
-      className: '',
-      html: `<div class="proj-note-marker">${notes.length}</div>`,
-      iconSize: [28, 28],
-      iconAnchor: [14, 14]
+    notes.forEach((n, idx) => {
+      let coords;
+      if (typeof n.la === 'number' && typeof n.lo === 'number') {
+        coords = [n.la, n.lo];
+      } else {
+        coords = R?.countryCenters?.[iso];
+        if (!coords) return;
+      }
+      const flag = flagEmoji(iso);
+      const cName = window.getCountryProfile?.(iso)?.name || iso;
+      const titleSnippet = (n.title || 'Notiz').slice(0, 24);
+      const icon = L.divIcon({
+        className: '',
+        html: `<div class="proj-note-marker-small" title="${escapeHtml(n.title||'')}">${flag}<span class="pnm-label">${escapeHtml(titleSnippet)}</span></div>`,
+        iconSize: [100, 22],
+        iconAnchor: [50, 22]
+      });
+      const marker = L.marker(coords, { icon });
+      marker.bindPopup(`
+        <div class="pnp-head">
+          <span class="pnp-flag">${flag}</span>
+          <span class="pnp-name">${escapeHtml(cName)}</span>
+          <span style="color:var(--ink-faint);font-size:10px">${new Date(n.created).toLocaleString('de-CH',{dateStyle:'short',timeStyle:'short'})}</span>
+        </div>
+        <div class="pnp-note">
+          <div class="pnp-note-title">${escapeHtml(n.title || 'Notiz')}</div>
+          <div class="pnp-note-content" style="-webkit-line-clamp:10">${escapeHtml(n.content || '')}</div>
+        </div>
+        <div style="display:flex;gap:5px;margin-top:8px">
+          <span class="pnp-btn" onclick="window._projEditNote('${iso}',${idx})">✏ Bearbeiten</span>
+          <span class="pnp-btn" style="background:var(--accent);color:#000" onclick="window._projOpenNote('${iso}','${cName.replace(/'/g,"\\'")}',${coords[0]},${coords[1]})">＋ Neue Notiz hier</span>
+        </div>
+      `, { className: 'proj-note-popup' });
+      projectNoteMarkers.addLayer(marker);
     });
-    const marker = L.marker(coords, { icon });
-    const notesHtml = notes.slice(0, 4).map(n => `
-      <div class="pnp-note">
-        <div class="pnp-note-title">${escapeHtml(n.title || 'Notiz')}</div>
-        <div class="pnp-note-content">${escapeHtml(n.content || '')}</div>
-      </div>
-    `).join('');
-    marker.bindPopup(`
-      <div class="pnp-head">
-        <span class="pnp-flag">${flag}</span>
-        <span class="pnp-name">${escapeHtml(cName)}</span>
-        <span style="color:var(--ink-faint);font-size:10px">${notes.length} Notiz${notes.length>1?'en':''}</span>
-      </div>
-      ${notesHtml}
-      ${notes.length > 4 ? `<div style="font-size:10px;color:var(--ink-faint);margin-top:4px">+${notes.length-4} weitere im Notizen-Tab</div>` : ''}
-      <span class="pnp-btn" onclick="window._projOpenNote('${iso}','${cName.replace(/'/g,"\\'")}')">＋ Neue Notiz</span>
-    `, { className: 'proj-note-popup' });
-    projectNoteMarkers.addLayer(marker);
   });
 }
-window._projOpenNote = (iso, name) => {
+window._projOpenNote = (iso, name, la, lo) => {
   map.closePopup();
-  openProjectNoteModal(iso, name);
+  openProjectNoteModal(iso, name, (la !== undefined && lo !== undefined) ? {lat:la, lng:lo} : null);
+};
+window._projEditNote = (iso, idx) => {
+  map.closePopup();
+  if (!activeProject?.countryNotes?.[iso]?.[idx]) return;
+  const note = activeProject.countryNotes[iso][idx];
+  const cName = window.getCountryProfile?.(iso)?.name || iso;
+  openProjectNoteModal(iso, cName, (note.la !== undefined && note.lo !== undefined) ? {lat:note.la, lng:note.lo} : null);
+  setTimeout(() => {
+    document.getElementById('projNoteTitle').value = note.title || '';
+    document.getElementById('projNoteContent').value = note.content || '';
+    document.getElementById('projectNoteModal').dataset.editIdx = idx;
+  }, 80);
 };
 
 async function saveProject(patch = {}) {
@@ -4584,13 +4702,19 @@ function renderProjChat(body) {
     <h4>💬 Projekt-Chat (KI mit Projekt-Kontext)</h4>
     <div id="projChatHistory" style="margin-bottom:12px;max-height:50vh;overflow-y:auto"></div>
     <textarea id="projChatInput" rows="3" placeholder="Frage im Kontext dieses Projekts…" style="width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:8px 10px;font-family:inherit;font-size:12px;resize:vertical"></textarea>
-    <div style="display:flex;gap:7px;margin-top:8px">
-      <label style="font-size:11px;color:var(--ink-dim);display:flex;align-items:center;gap:5px"><input type="checkbox" id="projChatWebSearch"> 🔍 Online-Recherche</label>
+    <div style="display:flex;gap:7px;margin-top:8px;flex-wrap:wrap">
+      <label style="font-size:11px;color:var(--ink-dim);display:flex;align-items:center;gap:5px"><input type="checkbox" id="projChatWebSearch"> 🔍 KI-Online</label>
+      <button class="tb-btn" id="projChatGoogle" style="background:#0a84ff;color:#fff">🌐 Web öffnen</button>
       <button class="tb-btn" id="projChatSend" style="margin-left:auto;background:var(--accent);color:#000">Senden</button>
     </div>
   </div>`;
   renderProjChatHistory();
   document.getElementById('projChatSend').onclick = sendProjectChat;
+  document.getElementById('projChatGoogle').onclick = () => {
+    const q = document.getElementById('projChatInput').value.trim();
+    if (!q && !activeProject?.thesis) return toast('Frage eingeben');
+    window.openWebsearch(q || activeProject.thesis.slice(0, 80), 'news');
+  };
 }
 
 function renderProjChatHistory() {
@@ -4728,34 +4852,59 @@ function applyProjectHighlights() {
   });
 }
 
-function openProjectNoteModal(iso, name) {
+function openProjectNoteModal(iso, name, latlng = null) {
   document.getElementById('projectNoteTitle').textContent = `Notiz · ${name} (im Projekt "${activeProject.name}")`;
   document.getElementById('projNoteTitle').value = '';
   document.getElementById('projNoteContent').value = '';
-  document.getElementById('projectNoteModal').dataset.iso = iso;
+  const modal = document.getElementById('projectNoteModal');
+  modal.dataset.iso = iso;
+  modal.dataset.la = latlng ? latlng.lat : '';
+  modal.dataset.lo = latlng ? latlng.lng : '';
+  modal.dataset.editIdx = ''; // Reset edit-mode
   openModal('projectNoteModal');
 }
 
 document.getElementById('projNoteSave')?.addEventListener('click', async () => {
   if (!activeProject) return;
-  const iso = document.getElementById('projectNoteModal').dataset.iso;
+  const modal = document.getElementById('projectNoteModal');
+  const iso = modal.dataset.iso;
+  const editIdx = modal.dataset.editIdx;
+  const la = parseFloat(modal.dataset.la);
+  const lo = parseFloat(modal.dataset.lo);
   const title = document.getElementById('projNoteTitle').value.trim() || 'Notiz';
   const content = document.getElementById('projNoteContent').value.trim();
   if (!content) return toast('Inhalt fehlt');
 
-  // Projekt-interne Notiz
   activeProject.countryNotes = activeProject.countryNotes || {};
   activeProject.countryNotes[iso] = activeProject.countryNotes[iso] || [];
-  const note = { title, content, created: new Date().toISOString(), projectId: activeProject.id, projectName: activeProject.name };
-  activeProject.countryNotes[iso].unshift(note);
+
+  if (editIdx !== '' && !isNaN(parseInt(editIdx))) {
+    // EDIT-MODE: bestehende Notiz aktualisieren, nicht neue erstellen
+    const i = parseInt(editIdx);
+    const existing = activeProject.countryNotes[iso][i];
+    if (existing) {
+      existing.title = title;
+      existing.content = content;
+      existing.updated = new Date().toISOString();
+      if (!isNaN(la) && !isNaN(lo)) { existing.la = la; existing.lo = lo; }
+    }
+  } else {
+    // CREATE-MODE: neue Notiz
+    const note = {
+      title, content, created: new Date().toISOString(),
+      projectId: activeProject.id, projectName: activeProject.name
+    };
+    if (!isNaN(la) && !isNaN(lo)) { note.la = la; note.lo = lo; }
+    activeProject.countryNotes[iso].unshift(note);
+    // Nur bei CREATE als reguläre Notiz speichern (sonst Duplikat bei Edit)
+    await autoSaveAiOutput(iso, `[${activeProject.name}] ${title}`, content, 'manual', ['projekt:'+activeProject.name]);
+  }
+
   await saveProject();
-
-  // Zusätzlich als reguläre Notiz speichern (auf Land), damit sie im Länderprofil sichtbar bleibt
-  await autoSaveAiOutput(iso, `[${activeProject.name}] ${title}`, content, 'manual', ['projekt:'+activeProject.name]);
-
+  modal.dataset.editIdx = ''; // reset
   document.getElementById('projectNoteModal').classList.remove('open');
-  toast('Notiz gespeichert');
-  renderProjectNoteMarkers(); // Marker auf Karte aktualisieren
+  toast(editIdx !== '' ? 'Notiz aktualisiert' : 'Notiz gespeichert');
+  renderProjectNoteMarkers();
   if (document.querySelector('.project-tab.active')?.dataset.ptab === 'countries') renderProjectTab('countries');
   if (document.querySelector('.project-tab.active')?.dataset.ptab === 'notes') renderProjectTab('notes');
 });
@@ -4815,7 +4964,9 @@ function closeProject() {
   document.getElementById('projectPanel').classList.remove('open');
   document.getElementById('projStatusBanner')?.classList.remove('show');
   exitProjectMode();
-  toast('Projekt geschlossen - Notizen bleiben im Länderprofil');
+  if (window._refreshSidebarProjects) window._refreshSidebarProjects();
+  refreshUserNoteMarkers();
+  toast('Projekt geschlossen - Notizen bleiben sichtbar');
 }
 document.getElementById('projModeExit')?.addEventListener('click', closeProject);
 
@@ -5057,6 +5208,71 @@ function exportProjectMarkdown() {
 }
 document.getElementById('ptbExport')?.addEventListener('click', exportProjectMarkdown);
 
+/* ════════════════════════════════════════════════════════════════
+   SIDEBAR-PROJEKTLISTE (Aktiv + Archiviert)
+   ════════════════════════════════════════════════════════════════ */
+async function renderSidebarProjects() {
+  const container = document.getElementById('sidebarProjects');
+  if (!container) return;
+  const all = await apiListProjects();
+  const active = all.filter(p => !p.archived);
+  const archived = all.filter(p => p.archived);
+  let html = `<div class="sb-projects-section">
+    <div class="sb-projects-title"><span>🔬 Aktive Projekte (${active.length})</span><button id="sbNewProjBtn">＋</button></div>`;
+  if (!active.length) {
+    html += `<div class="sb-projects-empty">Noch keine Projekte. Klick ＋ oder ＋ Projekt oben.</div>`;
+  } else {
+    active.forEach(p => {
+      html += `<div class="sb-proj-item" data-id="${p.id}">
+        <div class="sb-proj-name">${escapeHtml(p.name)}</div>
+        <div class="sb-proj-meta">${(p.countries||[]).length} Länder · ${new Date(p.updated).toLocaleDateString('de-CH')}</div>
+        <div class="sb-proj-actions">
+          <button data-act="open" data-id="${p.id}">Öffnen</button>
+          <button data-act="archive" data-id="${p.id}">🗄 Archivieren</button>
+        </div>
+      </div>`;
+    });
+  }
+  html += `</div>`;
+  if (archived.length) {
+    html += `<div class="sb-projects-section">
+      <div class="sb-projects-title"><span>🗄 Archiviert (${archived.length})</span></div>`;
+    archived.forEach(p => {
+      html += `<div class="sb-proj-item archived" data-id="${p.id}">
+        <div class="sb-proj-name">${escapeHtml(p.name)}</div>
+        <div class="sb-proj-meta">archiviert · ${new Date(p.updated).toLocaleDateString('de-CH')}</div>
+        <div class="sb-proj-actions">
+          <button data-act="open" data-id="${p.id}">Öffnen</button>
+          <button data-act="restore" data-id="${p.id}">↺ Wiederherstellen</button>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  container.innerHTML = html;
+  document.getElementById('sbNewProjBtn')?.addEventListener('click', () => openNewProjectModal());
+  container.querySelectorAll('button[data-act]').forEach(b => {
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      const id = b.dataset.id, act = b.dataset.act;
+      if (act === 'open') loadProject(id);
+      else if (act === 'archive' || act === 'restore') {
+        const proj = await apiGetProject(id);
+        if (proj) { proj.archived = (act === 'archive'); await apiUpdateProject(proj); renderSidebarProjects(); }
+      }
+    };
+  });
+  container.querySelectorAll('.sb-proj-item').forEach(item => {
+    item.onclick = (e) => {
+      if (e.target.tagName === 'BUTTON') return;
+      loadProject(item.dataset.id);
+    };
+  });
+}
+// Bei Projekt-Save/Close/Delete neu rendern (window-override geht nicht bei func decl)
+// stattdessen: nach apiCreate/apiDelete/closeProject einfach renderSidebarProjects rufen
+window._refreshSidebarProjects = renderSidebarProjects;
+
 /* ════ START ════ */
 buildCategoryUI();
 renderStatic();
@@ -5067,6 +5283,8 @@ loadSentinelConfig();
 loadPins(); renderPins();
 loadComparedCountries();
 registerSW();
+setTimeout(renderSidebarProjects, 500);
+setTimeout(refreshUserNoteMarkers, 1000);
 
 // OSINT-Feed im Hintergrund laden (für KI-Kontext)
 if (CONFIG.USE_BACKEND) {
