@@ -23,26 +23,65 @@ const R = window.REF;
 
 /* ════ MAP INIT ════ */
 const map = L.map('map', {zoomControl:true, worldCopyJump:true, minZoom:2, maxZoom:18}).setView([28, 25], 3);
+// NASA GIBS - tägliche Satellitenbilder (VIIRS, gestern als Default für sichere Verfügbarkeit)
+function gibsDate(daysBack=1) {
+  const d = new Date(Date.now() - daysBack * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+function gibsTileLayer(layerName, maxZoom=9) {
+  return L.tileLayer(
+    `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layerName}/default/${gibsDate(1)}/GoogleMapsCompatible_Level${maxZoom}/{z}/{y}/{x}.jpg`,
+    { attribution: '© NASA GIBS / VIIRS', maxZoom, tileSize:256 }
+  );
+}
+
 const bases = {
   dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
     {attribution:'© OSM, © CARTO', subdomains:'abcd', maxZoom:19}),
   sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     {attribution:'© Esri, Maxar, Earthstar', maxZoom:19}),
+  nasa: gibsTileLayer('VIIRS_SNPP_CorrectedReflectance_TrueColor', 9),
   terrain: L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
     {attribution:'© OSM, © CARTO', subdomains:'abcd', maxZoom:19}),
   topo: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
     {attribution:'© OpenTopoMap', subdomains:'abc', maxZoom:17}),
 };
 let activeBase = bases.dark.addTo(map);
+let activeBaseKey = 'dark';
 document.querySelectorAll('.basemap-btn').forEach(b => {
   b.onclick = () => {
     document.querySelectorAll('.basemap-btn').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     map.removeLayer(activeBase);
-    activeBase = bases[b.dataset.base].addTo(map);
+    activeBaseKey = b.dataset.base;
+    activeBase = bases[activeBaseKey].addTo(map);
     activeBase.bringToBack && activeBase.bringToBack();
+    // Date-Picker nur für NASA-Layer einblenden
+    document.getElementById('satDateRow').style.display = (activeBaseKey === 'nasa') ? 'flex' : 'none';
   };
 });
+
+// NASA-Date-Picker initialisieren
+const satDateInput = document.getElementById('satDate');
+if (satDateInput) {
+  const yesterday = gibsDate(1);
+  satDateInput.value = yesterday;
+  satDateInput.max = yesterday;
+  satDateInput.addEventListener('change', () => {
+    const d = satDateInput.value;
+    if (!d) return;
+    if (activeBaseKey === 'nasa') map.removeLayer(activeBase);
+    // Neue NASA-Tile-Layer mit gewähltem Datum
+    bases.nasa = L.tileLayer(
+      `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${d}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
+      { attribution: '© NASA GIBS / VIIRS · ' + d, maxZoom: 9, tileSize: 256 }
+    );
+    if (activeBaseKey === 'nasa') {
+      activeBase = bases.nasa.addTo(map);
+      activeBase.bringToBack && activeBase.bringToBack();
+    }
+  });
+}
 
 /* ════ LAYER DEFINITIONEN ════
    Kategorien: events, energy, maritime, military, infra, economy, environment, air
@@ -89,6 +128,7 @@ const LAYERS = {
   planesMil:   {n:'Militärflüge (Live)', c:'#ff7847', cat:'air', on:false},
   // Live-Militär (Proxies)
   thermal:     {n:'Thermal-Anomalien (FIRMS)', c:'#ff4d3d', cat:'liveMil', on:false},
+  gdeltMil:    {n:'GDELT Militär-Themen (Live)', c:'#ff5cf2', cat:'liveMil', on:false},
 };
 
 // LayerGroups initialisieren
@@ -161,6 +201,7 @@ function buildCategoryUI() {
             if (key === 'quake') loadQuakes();
             if (key === 'disaster') loadDisasters();
             if (key === 'thermal') startThermal();
+            if (key === 'gdeltMil') loadGdeltMil();
           } else {
             map.removeLayer(l.group);
             if (key === 'planes') stopPlanes();
@@ -188,6 +229,7 @@ function toggleLayer(key, el) {
     if (key === 'quake') loadQuakes();
     if (key === 'disaster') loadDisasters();
     if (key === 'thermal') startThermal();
+    if (key === 'gdeltMil') loadGdeltMil();
   } else {
     map.removeLayer(l.group);
     if (key === 'planes') stopPlanes();
@@ -534,6 +576,80 @@ async function loadThermal() {
   }
 }
 
+/* ════ LIVE: GDELT GKG MILITÄR-THEMEN ════ */
+let gdeltMilStore = [];
+async function loadGdeltMil() {
+  LAYERS.gdeltMil.group.clearLayers();
+  gdeltMilStore = [];
+  if (!CONFIG.USE_BACKEND) { setCnt('gdeltMil', '–'); return; }
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/gdeltmil`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const events = data.events || [];
+    const symMap = {troops:'🪖', mobilize:'⚡', exercise:'⚔', weapons:'🎯', cyber:'💻'};
+    const labelMap = {troops:'Truppenverlegung', mobilize:'Mobilisierung', exercise:'Manöver', weapons:'Waffen/Transfer', cyber:'Cyberangriff'};
+    events.forEach(ev => {
+      gdeltMilStore.push(ev);
+      const r = ev.count ? Math.min(4 + Math.log(ev.count + 1) * 2, 14) : 6;
+      L.circleMarker([ev.la, ev.lo], {
+        radius: r, color: LAYERS.gdeltMil.c, fillColor: LAYERS.gdeltMil.c,
+        fillOpacity: .35, weight: 1.5, dashArray: '2 2'
+      })
+      .bindPopup(popup(`${symMap[ev.c]||'•'} ${ev.n}`,
+        `${ev.i || ''}${ev.count ? `<br><span class="row"><span>Meldungen:</span><b>${ev.count}</b></span>` : ''}`,
+        LAYERS.gdeltMil.c, labelMap[ev.c] || 'Militär-Thema', ev.la, ev.lo))
+      .addTo(LAYERS.gdeltMil.group);
+    });
+    setCnt('gdeltMil', events.length);
+  } catch (e) {
+    console.error('GdeltMil:', e);
+    setCnt('gdeltMil', '!');
+  }
+}
+
+/* ════ OSINT NEWS PANEL ════ */
+let osintStore = [];
+async function loadOsint() {
+  const panel = document.getElementById('osintList');
+  panel.innerHTML = '<div class="osint-loading">Lade OSINT-Quellen…</div>';
+  if (!CONFIG.USE_BACKEND) {
+    panel.innerHTML = '<div class="osint-loading">Backend nicht aktiv.</div>';
+    return;
+  }
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/osint`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    osintStore = data.items || [];
+    if (!osintStore.length) {
+      panel.innerHTML = '<div class="osint-loading">Keine Items geladen.</div>';
+      return;
+    }
+    panel.innerHTML = osintStore.map(it => `
+      <a class="osint-item" href="${it.link}" target="_blank" rel="noopener">
+        <div class="osint-meta"><span class="osint-src">${it.source}</span><span class="osint-tag tag-${it.tag}">${it.tag}</span></div>
+        <div class="osint-title">${escapeHtml(it.title)}</div>
+        ${it.summary ? `<div class="osint-sum">${escapeHtml(it.summary)}</div>` : ''}
+        <div class="osint-date">${it.date ? fmtDate(it.date) : ''}</div>
+      </a>
+    `).join('');
+    document.getElementById('osintCount').textContent = `${osintStore.length} Items aus ${data.sources} Quellen`;
+  } catch (e) {
+    panel.innerHTML = `<div class="osint-loading">Fehler: ${e.message}</div>`;
+  }
+}
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtDate(s) {
+  try {
+    const d = new Date(s);
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 3600) return Math.round(diff/60) + ' min';
+    if (diff < 86400) return Math.round(diff/3600) + ' h';
+    return Math.round(diff/86400) + ' d';
+  } catch { return s; }
+}
+
 /* ════ LIVE: SCHIFFE ════ */
 let shipTimer = null;
 function startShips() {
@@ -608,6 +724,15 @@ document.getElementById('shipBtn').onclick = () => {
 document.getElementById('legendBtn').onclick = () => {
   document.getElementById('legend').classList.toggle('show');
 };
+document.getElementById('osintBtn').onclick = () => {
+  const panel = document.getElementById('osint');
+  const wasOpen = panel.classList.contains('open');
+  panel.classList.toggle('open');
+  if (!wasOpen && !osintStore.length) loadOsint();
+};
+document.getElementById('closeOsint').onclick = () => {
+  document.getElementById('osint').classList.remove('open');
+};
 
 /* ════ CLOCK ════ */
 setInterval(() => {
@@ -674,6 +799,14 @@ function gatherContext(lat, lng) {
     actions: nearbyAny(lat, lng, R.militaryActions).map(a => `${a.n}: ${a.d}`).slice(0, 5),
     milPlanes: nearbyAny(lat, lng, milPlaneStore, 1500).map(p => `${p.callsign||p.icao} (${p.country||'?'})`).slice(0, 10),
     thermal: nearbyAny(lat, lng, thermalStore, 800).map(f => `${Math.round(f.bright)}K @ ${f.la.toFixed(1)},${f.lo.toFixed(1)}${f.region?' ['+f.region+']':''}`).slice(0, 10),
+    gdeltMil: nearbyAny(lat, lng, gdeltMilStore, 1200).map(e => `${e.n}: ${e.i||''}`).slice(0, 8),
+    osintHints: osintStore.filter(it => {
+      const r = currentRegion && (currentRegion.name || '');
+      if (!r) return false;
+      const t = (it.title + ' ' + (it.summary||'')).toLowerCase();
+      // sehr grobe Heuristik – einzelne Schlagworte aus dem Regionsnamen
+      return r.toLowerCase().split(/[\s,]+/).filter(w => w.length > 3).some(w => t.includes(w));
+    }).slice(0, 5).map(it => `[${it.source}] ${it.title}`),
     chokes: nearbyAny(lat, lng, R.chokes, 1500).map(c => c.n),
     ports: nearbyAny(lat, lng, R.ports, 800).map(p => p.n),
     bases: nearbyAny(lat, lng, R.militaryBases, 1000).map(b => `${b.n} (${b.country})`).slice(0, 10),
@@ -781,6 +914,8 @@ function buildContextString() {
   if (c.actions?.length) lines.push('AKTUELLE MILITÄRAKTIONEN: ' + c.actions.join('; '));
   if (c.milPlanes?.length) lines.push('LIVE Militärflüge (gerade in der Luft): ' + c.milPlanes.join(', '));
   if (c.thermal?.length) lines.push('THERMAL-ANOMALIEN (FIRMS, letzte 24-48h, Proxy für Kampf/Brand): ' + c.thermal.join('; '));
+  if (c.gdeltMil?.length) lines.push('GDELT MILITÄR-EREIGNISSE (Live-News-Geocoding): ' + c.gdeltMil.join('; '));
+  if (c.osintHints?.length) lines.push('OSINT-MELDUNGEN (jüngste, Region-bezogen): ' + c.osintHints.join(' | '));
   if (c.conflicts?.length) lines.push('Konflikt-Ereignisse: ' + c.conflicts.join('; '));
   if (c.bases?.length) lines.push('Militärbasen in Reichweite: ' + c.bases.join('; '));
   if (c.exercises?.length) lines.push('Militärübungen: ' + c.exercises.join(', '));
@@ -872,3 +1007,9 @@ renderStatic();
 buildLegend();
 loadConflicts();
 conflictTimer = setInterval(loadConflicts, CONFIG.CONFLICT_REFRESH_MS);
+
+// OSINT-Feed im Hintergrund laden (für KI-Kontext)
+if (CONFIG.USE_BACKEND) {
+  setTimeout(loadOsint, 1500);
+  setInterval(loadOsint, 20 * 60 * 1000);
+}

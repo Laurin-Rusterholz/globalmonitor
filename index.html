@@ -21,9 +21,14 @@
     <div class="scroll">
       <div class="basemap-row">
         <div class="basemap-btn active" data-base="dark">Dunkel</div>
-        <div class="basemap-btn" data-base="sat">Satellit</div>
+        <div class="basemap-btn" data-base="sat">Esri-Sat</div>
+        <div class="basemap-btn" data-base="nasa">NASA-Tag</div>
         <div class="basemap-btn" data-base="terrain">Vektor</div>
         <div class="basemap-btn" data-base="topo">Topo</div>
+      </div>
+      <div class="sat-date-row" id="satDateRow" style="display:none">
+        <label>Datum (NASA VIIRS):</label>
+        <input id="satDate" type="date" max="" />
       </div>
       <div id="categories"></div>
       <div class="hint">
@@ -39,12 +44,24 @@
       <button class="tb-btn" id="refreshBtn">↻ Aktualisieren</button>
       <button class="tb-btn" id="planeBtn">✈ Flüge</button>
       <button class="tb-btn" id="shipBtn">⚓ Schiffe</button>
+      <button class="tb-btn" id="osintBtn">📰 OSINT</button>
       <button class="tb-btn" id="legendBtn">☰ Legende</button>
     </div>
     <div id="clock"><b id="utcTime">--:--</b> UTC · <span id="evtTotal">0</span> Ereignisse</div>
     <div id="legend"></div>
     <div id="map"></div>
   </div>
+</div>
+
+<div id="osint">
+  <div class="osint-head">
+    <div>
+      <div class="region">OSINT-Feed</div>
+      <div class="coords" id="osintCount">Lade…</div>
+    </div>
+    <button class="closeBtn" id="closeOsint">×</button>
+  </div>
+  <div id="osintList" class="osint-list"></div>
 </div>
 
 <div id="ai">
