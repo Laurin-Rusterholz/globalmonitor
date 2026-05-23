@@ -1564,11 +1564,12 @@ function renderCountryInfo(iso2, profile, economic, live) {
   html += `<div class="ci-section">
     <div class="ci-section-title">Dossiers & Notizen <span class="ci-stand">Netlify Blobs</span></div>
     <div class="dossier-actions">
-      <button class="ci-refresh" data-scope="full"     id="dosFull">📊 Voll-Dossier (AI)</button>
-      <button class="ci-refresh" data-scope="trade"    id="dosTrade">📦 Handel-Analyse</button>
-      <button class="ci-refresh" data-scope="military" id="dosMil">🛡 Militär-Profil</button>
-      <button class="ci-refresh" data-scope="role"     id="dosRole">🌐 Globale Rolle</button>
-      <button class="ci-refresh" id="newNoteBtn">✏ Eigene Notiz</button>
+      <button class="ci-refresh" data-scope="full"     id="dosFull">📊 Voll-Dossier</button>
+      <button class="ci-refresh" data-scope="trade"    id="dosTrade">📦 Handel</button>
+      <button class="ci-refresh" data-scope="military" id="dosMil">🛡 Militär</button>
+      <button class="ci-refresh" data-scope="role"     id="dosRole">🌐 Rolle</button>
+      <button class="ci-refresh" data-scope="full"     id="dosDeep" style="background:linear-gradient(135deg,#5e5ce6,#bf5af2);color:#fff;border:none">🔬 Tiefendossier+Web</button>
+      <button class="ci-refresh" id="newNoteBtn">✏ Notiz</button>
     </div>
     <div id="ciDossierList" class="ci-dossier-list">Lade Dokumente…</div>
   </div>`;
@@ -1579,8 +1580,9 @@ function renderCountryInfo(iso2, profile, economic, live) {
   document.getElementById('ciAiUpdateBtn')?.addEventListener('click', () => doAiUpdate(iso2));
   document.getElementById('ciCompareBtn')?.addEventListener('click', () => toggleCompareCountry(iso2, name));
   ['dosFull','dosTrade','dosMil','dosRole'].forEach(id => {
-    document.getElementById(id)?.addEventListener('click', (e) => generateDossier(iso2, name, e.currentTarget.dataset.scope));
+    document.getElementById(id)?.addEventListener('click', (e) => generateDossier(iso2, name, e.currentTarget.dataset.scope, false));
   });
+  document.getElementById('dosDeep')?.addEventListener('click', (e) => generateDossier(iso2, name, e.currentTarget.dataset.scope, true));
   document.getElementById('newNoteBtn')?.addEventListener('click', () => openNoteModal(iso2, name));
   loadNotesForCountry(iso2);
   // Org-Chips klickbar im Sidemenu
@@ -2949,47 +2951,93 @@ function renderDossierGenTab(body) {
   </div>`;
 
   html += `<div class="dossier-gen-row">
-    <button data-scope="full">📊 <b>Voll-Dossier</b><small>Alle Themen, ausführlich</small></button>
-    <button data-scope="trade">📦 <b>Handel & Wirtschaft</b><small>Industrien, Partner, Verflechtungen</small></button>
-    <button data-scope="military">🛡 <b>Militär-Analyse</b><small>Stärke, Doktrin, Brennpunkte</small></button>
-    <button data-scope="role">🌐 <b>Globale Rolle</b><small>Regional + global</small></button>
+    <button data-scope="full" data-deep="0">📊 <b>Voll-Dossier</b><small>Alle Themen · ~20s · Sonnet 4.6</small></button>
+    <button data-scope="trade" data-deep="0">📦 <b>Handel & Wirtschaft</b><small>Industrien, Partner</small></button>
+    <button data-scope="military" data-deep="0">🛡 <b>Militär-Analyse</b><small>Stärke, Doktrin, Brennpunkte</small></button>
+    <button data-scope="role" data-deep="0">🌐 <b>Globale Rolle</b><small>Regional + global</small></button>
+    <button data-scope="full" data-deep="1" style="grid-column:span 2;background:linear-gradient(135deg,#5e5ce6,#bf5af2);color:#fff;border:none">🔬 <b>Tiefendossier + Web</b><small>Background, Sonnet+Web, 1-5 min, 350-550 Wörter/Sektion</small></button>
   </div>`;
   html += `<div id="cdDossierResult"></div>`;
   body.innerHTML = html;
 
   body.querySelectorAll('.dossier-gen-row button').forEach(b => {
-    b.onclick = () => generateDossierIn(iso, name, b.dataset.scope);
+    b.onclick = () => generateDossierIn(iso, name, b.dataset.scope, b.dataset.deep === '1');
   });
 }
 
-async function generateDossierIn(iso, name, scope) {
+async function generateDossierIn(iso, name, scope, deep = false) {
   const target = document.getElementById('cdDossierResult');
   if (!target) return;
+  const ctx = { profile: dossierState.profile, live: dossierState.live, economic: dossierState.economic };
+
+  if (deep) {
+    // BACKGROUND: Tiefendossier mit Web-Recherche, polling bis 5 min
+    target.innerHTML = `<div style="padding:30px;text-align:center;color:var(--ink-dim)">
+      <div style="font-size:24px;margin-bottom:10px">🔬</div>
+      <b>Tiefendossier mit Web-Recherche</b> für ${escapeHtml(name)}…<br>
+      <small style="font-size:11px;color:var(--ink-faint)">Sonnet 4.6 + 8× Web-Suche · 350-550 Wörter pro Sektion · Dauert 1-5 min</small>
+      <div id="cdDeepProgress" style="margin-top:15px;color:var(--accent);font-size:12px">… startet</div>
+    </div>`;
+    try {
+      const d = await window.runBackgroundJob('dossier', {
+        iso, countryName: name, scope, context: ctx, webSearch: true, save: true
+      }, {
+        maxWaitSec: 300, // 5 Min
+        pollIntervalMs: 4000,
+        onProgress: (i) => {
+          const p = document.getElementById('cdDeepProgress');
+          if (p) p.textContent = `… Web-Recherche läuft (${Math.round(i * 4)}s)`;
+        }
+      });
+      if (d.error) throw new Error(d.error);
+      renderInlineDossier(target, d);
+      toast(`🔬 Tiefendossier fertig${d.webSources?.length ? ' (' + d.webSources.length + ' Web-Quellen)' : ''}`);
+      loadNotesForCountry(iso);
+    } catch (e) {
+      target.innerHTML = `<div style="padding:20px;color:var(--conflict)">
+        <b>Tiefendossier-Fehler:</b> ${escapeHtml(e.message)}<br>
+        <small style="color:var(--ink-faint);margin-top:8px;display:block">
+          Falls Background-Mode nicht klappt: NETLIFY_API_TOKEN + NETLIFY_SITE_ID in Netlify Env Vars setzen.
+        </small>
+      </div>`;
+    }
+    return;
+  }
+
+  // SYNC (schnell, <22s)
   target.innerHTML = `<div style="padding:30px;text-align:center;color:var(--ink-dim)">
     <div style="font-size:24px;margin-bottom:10px">⏳</div>
     Claude generiert ${scope}-Dossier für ${escapeHtml(name)}…<br>
-    <small style="font-size:10px;color:var(--ink-faint)">Mit aktuellen Wikidata- und Wirtschaftsdaten als Kontext. Kann 15-30s dauern.</small>
+    <small style="font-size:10px;color:var(--ink-faint)">Sonnet 4.6, ~15-22s. Für mehr Tiefe + Web-Recherche → 🔬 Tiefendossier.</small>
   </div>`;
-
   try {
-    const ctx = { profile: dossierState.profile, live: dossierState.live, economic: dossierState.economic };
     const res = await fetch(`${CONFIG.BACKEND_BASE}/dossier`, {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ iso, countryName: name, scope, context: ctx, save: true })
     });
-    if (!res.ok) throw new Error('HTTP '+res.status);
-    const d = await res.json();
-    if (d.error) throw new Error(d.error);
+    const text = await res.text();
+    let d;
+    try { d = JSON.parse(text); }
+    catch { throw new Error(`kein JSON (HTTP ${res.status}): ${text.slice(0,150)}`); }
+    if (!res.ok || d.error) throw new Error(d.error || `HTTP ${res.status}`);
     renderInlineDossier(target, d);
     toast('Dossier gespeichert');
+    loadNotesForCountry(iso);
   } catch (e) {
-    target.innerHTML = `<div style="padding:20px;color:var(--conflict)">Fehler: ${escapeHtml(e.message)}</div>`;
+    const errMsg = e.message || String(e);
+    const hint = /504|timeout|aborted/i.test(errMsg)
+      ? '<br><small style="color:var(--ink-faint);margin-top:8px;display:block">→ Bitte 🔬 Tiefendossier + Web nutzen (läuft im Hintergrund, kein Timeout-Limit).</small>'
+      : '';
+    target.innerHTML = `<div style="padding:20px;color:var(--conflict)">Fehler: ${escapeHtml(errMsg)}${hint}</div>`;
   }
 }
 
 function renderInlineDossier(target, d) {
   const labels = {profile:'Politisches Profil',economy:'Wirtschaft',industries:'Kernindustrien',trade:'Handelspartner',military:'Militärische Stärke',doctrine:'Militärische Doktrin',regionalRole:'Rolle in der Region',globalRole:'Globale Rolle',hotspots:'Brennpunkte'};
   let html = '';
+  if (d.deepDossier || d.webSearchUsed) {
+    html += `<div style="background:linear-gradient(135deg,rgba(94,92,230,0.15),rgba(191,90,242,0.15));padding:8px 12px;border-radius:6px;margin-bottom:10px;font-size:11px;color:var(--ink-dim)">🔬 <b>Tiefendossier</b> · Modell: ${escapeHtml(d.model||'?')}${d.webSearchUsed ? ' · mit Web-Recherche' : ''}${d.webSources?.length ? ' · ' + d.webSources.length + ' Quellen' : ''}</div>`;
+  }
   if (d.summary) html += `<div class="doc-summary">${escapeHtml(d.summary)}</div>`;
   if (d.sections) {
     Object.entries(d.sections).forEach(([k,v]) => {
@@ -3007,6 +3055,56 @@ function renderInlineDossier(target, d) {
     if (kf.nuclearWeapons) html += `<div><b>Atomwaffen:</b> ${kf.nuclearWeapons}</div>`;
     if (kf.majorAllies?.length) html += `<div><b>Hauptverbündete:</b> ${kf.majorAllies.join(', ')}</div>`;
     if (kf.majorAdversaries?.length) html += `<div><b>Hauptgegner:</b> ${kf.majorAdversaries.join(', ')}</div>`;
+    html += `</div></div>`;
+    if (kf.keyNumbers?.length) {
+      html += `<div class="doc-section"><h3>📊 Zahlen & Fakten (${kf.keyNumbers.length})</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">`;
+      kf.keyNumbers.forEach(n => {
+        html += `<div style="background:var(--panel-2);padding:6px 9px;border-radius:5px;border-left:3px solid var(--accent)">
+          <div style="font-size:13px;font-weight:700;color:var(--accent)">${escapeHtml(n.value||'?')}</div>
+          <div style="color:var(--ink-dim);margin-top:2px">${escapeHtml(n.metric||'')}${n.year?' <span style="color:var(--ink-faint)">('+escapeHtml(n.year)+')</span>':''}</div>
+          ${n.context?'<div style="color:var(--ink-faint);font-size:9.5px;margin-top:3px">'+escapeHtml(n.context)+'</div>':''}
+          ${n.source?'<div style="color:var(--ink-faint);font-size:9px;margin-top:2px">📎 '+escapeHtml(n.source)+'</div>':''}
+        </div>`;
+      });
+      html += `</div></div>`;
+    }
+  }
+  if (d.recentEvents?.length) {
+    html += `<div class="doc-section"><h3>🕒 Aktuelle Ereignisse (${d.recentEvents.length})</h3><div style="font-size:11px;line-height:1.6">`;
+    d.recentEvents.forEach(e => {
+      html += `<div style="margin-bottom:6px;padding-left:10px;border-left:2px solid var(--accent)">
+        <b style="color:var(--accent);font-size:10.5px">${escapeHtml(e.date||'?')}</b>
+        <div style="color:var(--ink)">${escapeHtml(e.event||'')}</div>
+        ${e.impact?'<div style="color:var(--ink-dim);font-size:10.5px;margin-top:2px">→ '+escapeHtml(e.impact)+'</div>':''}
+        ${e.source?'<div style="color:var(--ink-faint);font-size:9.5px;margin-top:2px">📎 '+escapeHtml(e.source)+'</div>':''}
+      </div>`;
+    });
+    html += `</div></div>`;
+  }
+  if (d.futureScenarios?.length) {
+    html += `<div class="doc-section"><h3>🔮 Zukunfts-Szenarien</h3>`;
+    d.futureScenarios.forEach(s => {
+      const pColor = s.probability === 'high' ? '#ff453a' : s.probability === 'medium' ? '#ff9f0a' : '#30d158';
+      html += `<div style="background:var(--panel-2);padding:9px 11px;margin-bottom:6px;border-radius:6px;border-left:3px solid ${pColor}">
+        <div style="display:flex;justify-content:space-between"><b>${escapeHtml(s.name||'?')}</b><span style="font-size:10px;background:${pColor};color:#000;padding:1px 7px;border-radius:8px;font-weight:600">${escapeHtml(s.probability||'?')} · ${escapeHtml(s.timeline||'?')}</span></div>
+        <div style="font-size:11px;color:var(--ink-dim);margin-top:5px;line-height:1.5">${escapeHtml(s.description||'')}</div>
+        ${s.drivers?.length?'<div style="font-size:10px;color:var(--ink-faint);margin-top:4px"><b style="color:var(--ink-dim)">Treiber:</b> '+s.drivers.map(escapeHtml).join(' · ')+'</div>':''}
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  if (d.monitoringIndicators?.length) {
+    html += `<div class="doc-section"><h3>📡 Monitoring-Indikatoren</h3><div style="font-size:11px;line-height:1.6">`;
+    d.monitoringIndicators.forEach(m => {
+      html += `<div style="margin-bottom:5px;padding:6px 10px;background:var(--panel-2);border-radius:5px"><b>${escapeHtml(m.indicator||'?')}</b> <span style="color:var(--ink-faint);margin-left:8px">→ aktuell: <b style="color:var(--ink-dim)">${escapeHtml(m.currentValue||'?')}</b> · Schwelle: <b style="color:var(--protest)">${escapeHtml(m.threshold||'?')}</b></span></div>`;
+    });
+    html += `</div></div>`;
+  }
+  if (d.webSources?.length) {
+    html += `<div class="doc-section"><h3>🌐 Web-Quellen (${d.webSources.length})</h3><div style="font-size:10.5px;max-height:200px;overflow-y:auto">`;
+    d.webSources.forEach(s => {
+      html += `<div style="margin-bottom:3px"><a href="${escapeHtml(s.url)}" target="_blank" style="color:var(--accent);text-decoration:none">${escapeHtml(s.title || s.url)}</a></div>`;
+    });
     html += `</div></div>`;
   }
   if (d.confidence) html += `<div class="doc-confidence">Confidence: <b>${d.confidence}</b> · ${escapeHtml(d.sourceNote||'')}</div>`;
@@ -3275,31 +3373,48 @@ async function loadNotesForCountry(iso) {
   }
 }
 
-async function generateDossier(iso, countryName, scope) {
-  const btn = document.querySelector(`button[data-scope="${scope}"]`);
+async function generateDossier(iso, countryName, scope, deep = false) {
+  const btn = deep
+    ? document.getElementById('dosDeep')
+    : document.querySelector(`button[data-scope="${scope}"]:not(#dosDeep)`);
   const orig = btn?.textContent;
-  if (btn) { btn.disabled = true; btn.textContent = '… AI generiert'; }
-  toast(`AI generiert ${scope}-Dossier für ${countryName}…`);
+  if (btn) { btn.disabled = true; btn.textContent = deep ? '… 🔬 Web-Recherche' : '… AI generiert'; }
+  toast(`${deep ? '🔬 Tiefendossier (1-5 min)' : 'AI ' + scope + '-Dossier'} für ${countryName}…`);
   try {
     const ctx = {
       profile: currentRegion?.profile,
       live: currentRegion?.live,
       economic: currentRegion?.economic,
     };
-    const res = await fetch(`${CONFIG.BACKEND_BASE}/dossier`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ iso, countryName, scope, context: ctx, save: true })
-    });
-    if (!res.ok) throw new Error('HTTP '+res.status);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    toast('Dossier gespeichert');
+    let data;
+    if (deep) {
+      data = await window.runBackgroundJob('dossier', {
+        iso, countryName, scope, context: ctx, webSearch: true, save: true
+      }, {
+        maxWaitSec: 300,
+        pollIntervalMs: 4000,
+        onProgress: (i) => {
+          if (btn) btn.textContent = `… 🔬 Web ${Math.round(i * 4)}s`;
+        }
+      });
+    } else {
+      const res = await fetch(`${CONFIG.BACKEND_BASE}/dossier`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ iso, countryName, scope, context: ctx, save: true })
+      });
+      const text = await res.text();
+      try { data = JSON.parse(text); }
+      catch { throw new Error(`kein JSON (HTTP ${res.status})`); }
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    toast(deep ? `🔬 Tiefendossier fertig${data.webSources?.length ? ' (' + data.webSources.length + ' Web-Quellen)' : ''}` : 'Dossier gespeichert');
     loadNotesForCountry(iso);
-    // Direkt öffnen
     if (data.savedAs) openDocument(data.savedAs);
     else openDocumentInline(data);
   } catch (e) {
-    toast('Dossier fehlgeschlagen: '+e.message);
+    const errMsg = e.message || String(e);
+    const isTimeout = /504|timeout|aborted/i.test(errMsg);
+    toast(`${deep ? '🔬 ' : ''}Dossier fehlgeschlagen: ${errMsg}${!deep && isTimeout ? ' → 🔬 Tiefendossier+Web nutzen' : ''}`);
   }
   if (btn) { btn.disabled = false; btn.textContent = orig; }
 }

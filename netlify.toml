@@ -5,14 +5,16 @@
 [functions]
   node_bundler = "esbuild"
 
+# Netlify Pro: max 26s sync timeout (Hardlimit). Werte > 26 ignoriert Netlify.
+# Für längere Operationen → Background Functions (Suffix -background, 15 min).
 [functions.ai]
-  timeout = 60
+  timeout = 26
 
 [functions.dossier]
-  timeout = 60
+  timeout = 26
 
 [functions.aiupdate]
-  timeout = 30
+  timeout = 26
 
 [functions.wikidata]
   timeout = 15
