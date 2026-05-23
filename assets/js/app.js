@@ -3894,6 +3894,112 @@ async function aiOnlySuggest() {
 
 document.getElementById('suggestAiBtn')?.addEventListener('click', aiOnlySuggest);
 
+/* ════════════════════════════════════════════════════════════════
+   PROJEKT-STORAGE: Blobs primär, localStorage als Fallback
+   ════════════════════════════════════════════════════════════════ */
+const LS_PROJECTS_KEY = 'gm_projects_v1';
+function lsLoadProjects() {
+  try { return JSON.parse(localStorage.getItem(LS_PROJECTS_KEY) || '[]'); } catch { return []; }
+}
+function lsSaveProjects(arr) {
+  try { localStorage.setItem(LS_PROJECTS_KEY, JSON.stringify(arr)); } catch {}
+}
+function lsCreateProject(data) {
+  const id = `local_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  const project = {
+    id,
+    name: String(data.name).slice(0, 200),
+    thesis: String(data.thesis || '').slice(0, 2000),
+    countries: Array.isArray(data.countries) ? data.countries.map(c => String(c).toUpperCase()).slice(0, 50) : [],
+    events: [], countryNotes: {}, actors: [], chatHistory: [], relatedCountries: [], view: null,
+    created: new Date().toISOString(), updated: new Date().toISOString(),
+    storage: 'localStorage'
+  };
+  const all = lsLoadProjects();
+  all.unshift(project);
+  lsSaveProjects(all);
+  return project;
+}
+function lsGetProject(id) {
+  return lsLoadProjects().find(p => p.id === id);
+}
+function lsUpdateProject(project) {
+  const all = lsLoadProjects();
+  const idx = all.findIndex(p => p.id === project.id);
+  project.updated = new Date().toISOString();
+  if (idx >= 0) all[idx] = project; else all.unshift(project);
+  lsSaveProjects(all);
+  return project;
+}
+function lsDeleteProject(id) {
+  lsSaveProjects(lsLoadProjects().filter(p => p.id !== id));
+}
+
+// API: Versuch Backend, dann LocalStorage-Fallback
+async function apiCreateProject(data) {
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/projects`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(data)
+    });
+    if (res.ok) {
+      const project = await res.json();
+      project.storage = 'blobs';
+      return project;
+    }
+    const body = await res.text();
+    console.warn('Backend-projects failed', res.status, body.slice(0,300));
+    // Fall through to localStorage
+  } catch (e) { console.warn('Backend-projects exception:', e.message); }
+  toast('Projekt lokal gespeichert (Backend offline)');
+  return lsCreateProject(data);
+}
+async function apiGetProject(id) {
+  if (id.startsWith('local_')) return lsGetProject(id);
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/projects?id=${encodeURIComponent(id)}`);
+    if (r.ok) return await r.json();
+  } catch {}
+  return lsGetProject(id);
+}
+async function apiUpdateProject(project) {
+  if (project.storage === 'localStorage' || project.id?.startsWith('local_')) {
+    return lsUpdateProject(project);
+  }
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/projects`, {
+      method: 'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(project)
+    });
+    if (r.ok) return await r.json();
+  } catch {}
+  // Backend failed, fallback localStorage
+  project.storage = 'localStorage';
+  return lsUpdateProject(project);
+}
+async function apiDeleteProject(id) {
+  if (id.startsWith('local_')) { lsDeleteProject(id); return true; }
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/projects?id=${encodeURIComponent(id)}`, {method:'DELETE'});
+    return r.ok;
+  } catch { lsDeleteProject(id); return true; }
+}
+async function apiListProjects() {
+  const local = lsLoadProjects();
+  let remote = [];
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/projects`);
+    if (r.ok) {
+      const d = await r.json();
+      remote = d.projects || [];
+    }
+  } catch {}
+  // Merge: prefer remote, append local-only
+  const remoteIds = new Set(remote.map(p => p.id));
+  const localOnly = local.filter(p => !remoteIds.has(p.id));
+  return [...remote, ...localOnly].sort((a,b) => new Date(b.updated) - new Date(a.updated));
+}
+
 document.getElementById('newProjCreate')?.addEventListener('click', async () => {
   const name = document.getElementById('newProjName').value.trim();
   const thesis = document.getElementById('newProjThesis').value.trim();
@@ -3906,15 +4012,9 @@ document.getElementById('newProjCreate')?.addEventListener('click', async () => 
   btn.disabled = true; btn.textContent = '… erstelle Projekt';
 
   try {
-    // Projekt anlegen
-    const res = await fetch(`${CONFIG.BACKEND_BASE}/projects`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ name, thesis, countries })
-    });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const project = await res.json();
+    const project = await apiCreateProject({ name, thesis, countries });
     document.getElementById('newProjectModal').classList.remove('open');
-    toast('Projekt erstellt - starte KI-Analyse');
+    toast(project.storage === 'localStorage' ? 'Projekt lokal erstellt' : 'Projekt erstellt');
     await loadProject(project.id);
     // KI-Analyse anstoßen
     runProjectAnalysis();
@@ -3929,9 +4029,9 @@ let projectNoteMarkers = L.layerGroup();
 
 async function loadProject(id) {
   try {
-    const r = await fetch(`${CONFIG.BACKEND_BASE}/projects?id=${encodeURIComponent(id)}`);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    activeProject = await r.json();
+    const p = await apiGetProject(id);
+    if (!p) throw new Error('Projekt nicht gefunden');
+    activeProject = p;
     // Andere Panels schliessen damit Fokus aufs Projekt liegt
     SIDE_PANELS.forEach(p => { if (p !== 'projectPanel') document.getElementById(p)?.classList.remove('open'); });
     // Fullscreen-Modus aktivieren
@@ -4003,11 +4103,7 @@ async function saveProject(patch = {}) {
   if (!activeProject) return;
   Object.assign(activeProject, patch);
   try {
-    const r = await fetch(`${CONFIG.BACKEND_BASE}/projects`, {
-      method: 'PUT', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(activeProject)
-    });
-    if (r.ok) activeProject = await r.json();
+    activeProject = await apiUpdateProject(activeProject);
   } catch (e) { console.warn('saveProject:', e); }
 }
 
@@ -4343,7 +4439,7 @@ document.getElementById('projDelete')?.addEventListener('click', async () => {
   if (!activeProject) return;
   if (!confirm(`Projekt "${activeProject.name}" löschen? (Notizen im Länderprofil bleiben erhalten)`)) return;
   try {
-    await fetch(`${CONFIG.BACKEND_BASE}/projects?id=${encodeURIComponent(activeProject.id)}`, {method:'DELETE'});
+    await apiDeleteProject(activeProject.id);
     toast('Projekt gelöscht');
     closeProject();
   } catch (e) { toast('Lösch-Fehler: ' + e.message); }
@@ -4371,14 +4467,9 @@ function closeProject() {
 }
 document.getElementById('projModeExit')?.addEventListener('click', closeProject);
 
-// In Research-Manager auch Projekte listen
+// In Research-Manager auch Projekte listen (Blobs + localStorage)
 async function loadAllProjects() {
-  if (!CONFIG.USE_BACKEND) return [];
-  try {
-    const r = await fetch(`${CONFIG.BACKEND_BASE}/projects`);
-    const d = await r.json();
-    return d.projects || [];
-  } catch { return []; }
+  return await apiListProjects();
 }
 
 // Erweitere Research-Manager mit Projekt-Sektion

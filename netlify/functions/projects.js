@@ -1,14 +1,22 @@
-// Recherche-Projekte: persistente Projektablage in Netlify Blobs
-// Storage: Store "research-projects", Keys "projectId"
-// Pro Projekt: Name, These, Länder, Events, Notizen, Status, Daten
+// Recherche-Projekte: Netlify Blobs Storage
+// Bei Fehler: detaillierte Diagnose im Response für Client-Fallback
 
-let blobsModule;
+let blobsModule, blobsImportError;
 try { blobsModule = require('@netlify/blobs'); }
-catch (e) { console.error('@netlify/blobs nicht verfügbar:', e.message); }
+catch (e) {
+  blobsImportError = e.message;
+  console.error('@netlify/blobs nicht verfügbar:', e.message);
+}
 
 function projStore() {
-  if (!blobsModule) throw new Error('Netlify Blobs nicht verfügbar (Package fehlt)');
-  return blobsModule.getStore({ name: 'research-projects', consistency: 'strong' });
+  if (!blobsModule) throw new Error('Netlify Blobs Package nicht installiert: ' + (blobsImportError||'?'));
+  // Versuche einfachste Form zuerst
+  try {
+    return blobsModule.getStore('research-projects');
+  } catch (e) {
+    // Fallback mit explicit name option
+    return blobsModule.getStore({ name: 'research-projects' });
+  }
 }
 function json(obj, status = 200) {
   return {
@@ -114,6 +122,10 @@ exports.handler = async (event) => {
     return json({ error: 'method not allowed' }, 405);
   } catch (e) {
     console.error('projects fn:', e);
-    return json({ error: e.message }, 500);
+    return json({
+      error: e.message,
+      hint: 'Falls Netlify Blobs nicht funktioniert: Frontend nutzt localStorage als Fallback',
+      stack: (e.stack||'').split('\n').slice(0, 5).join(' | ')
+    }, 500);
   }
 };
