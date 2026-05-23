@@ -29,9 +29,10 @@ exports.handler = async (event) => {
   const errors = [];
   await Promise.all(QUERIES.map(async item => {
     try {
+      // GDELT GEO API erfordert mode=PointData und format=GeoJSON (Großschreibung)
       const params = mode === 'range'
-        ? `&format=geojson&startdatetime=${startdt}&enddatetime=${enddt}&maxpoints=200`
-        : `&format=geojson&timespan=${timespan}&maxpoints=200`;
+        ? `&mode=PointData&format=GeoJSON&startdatetime=${startdt}&enddatetime=${enddt}&maxpoints=200`
+        : `&mode=PointData&format=GeoJSON&timespan=${timespan}&maxpoints=200`;
       const url = 'https://api.gdeltproject.org/api/v2/geo/geo?query=' +
         encodeURIComponent(item.q) + params;
       const ctrl = new AbortController();

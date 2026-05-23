@@ -34,9 +34,10 @@ ${baseCountries.length ? `Basis-Länder vom Nutzer vorgewählt: ${baseCountries.
 
 Liefere das strukturierte JSON.`;
 
+    // Haiku ist 3-4x schneller als Sonnet - wichtig für 10s-Netlify-Timeout
     const reqBody = {
-      model: 'claude-sonnet-4-6',
-      max_tokens: 2000,
+      model: webSearch ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001',
+      max_tokens: 1500,
       system: sys,
       messages: [{ role: 'user', content: userMsg }],
     };
@@ -44,15 +45,21 @@ Liefere das strukturierte JSON.`;
       reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }];
     }
 
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify(reqBody),
-    });
+    const ctrl = new AbortController();
+    const timeoutId = setTimeout(() => ctrl.abort(), 9000);
+    let res;
+    try {
+      res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify(reqBody),
+        signal: ctrl.signal
+      });
+    } finally { clearTimeout(timeoutId); }
     const data = await res.json();
     const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
     const m = text.match(/\{[\s\S]*\}/);

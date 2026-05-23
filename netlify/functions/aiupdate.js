@@ -41,8 +41,8 @@ Bitte aktualisiere auf den neuesten Stand deines Wissens. Antworte nur mit dem J
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 600,
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 800,
         system: sys,
         messages: [{role:'user', content: userMsg}]
       })
