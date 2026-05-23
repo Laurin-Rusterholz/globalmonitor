@@ -1,7 +1,11 @@
-// Background Function - kann bis 15 Minuten laufen (Netlify Free + Pro)
-// Wird via /.netlify/functions/projectanalyze-background aufgerufen.
-// Liefert sofort 202 zurück; das eigentliche Ergebnis landet via jobId in
-// Blob-Store 'ai-jobs', von wo der Client es per getjob.js abholt.
+// Background Function - bis zu 15min Laufzeit (Netlify Free + Pro).
+// Tiefenanalyse mit Sonnet 4.6 + Web-Suche (10 Uses). Liefert sofort 202;
+// das Ergebnis landet via jobId in Blob-Store 'ai-jobs' und wird vom Client
+// per getjob.js abgeholt.
+//
+// Diese Function ist für die "Tiefenanalyse"-Variante gedacht: max Tiefe,
+// max Tokens, Web-Recherche. Die schnelle Sync-Variante läuft über
+// projectanalyze.js (3-fach Split, kein Web-Search, ~20s).
 
 let blobsModule;
 try { blobsModule = require('@netlify/blobs'); }
@@ -23,61 +27,138 @@ async function setJob(jobId, payload) {
 }
 
 exports.handler = async (event) => {
-  // Background-Function: liefert automatisch 202 zurück
   let body;
   try { body = JSON.parse(event.body || '{}'); } catch { body = {}; }
-  const { jobId, thesis, baseCountries = [], webSearch = false, recentEvents = [] } = body;
+  const { jobId, thesis, baseCountries = [], webSearch = true, recentEvents = [] } = body;
   if (!jobId || !thesis) {
     console.error('Background fehlt jobId oder thesis');
     return { statusCode: 200, body: '' };
   }
 
-  await setJob(jobId, { status: 'running', started: new Date().toISOString() });
-
-  const eventsContext = recentEvents.length
-    ? `\n\nAKTUELLE EREIGNISSE (Live-Daten):\n${recentEvents.slice(0, 40).map(e => '- ' + e).join('\n')}`
-    : '';
+  await setJob(jobId, { status: 'running', started: new Date().toISOString(), stage: 'init' });
 
   if (!process.env.ANTHROPIC_API_KEY) {
     await setJob(jobId, { status: 'error', error: 'ANTHROPIC_API_KEY fehlt', completed: new Date().toISOString() });
     return { statusCode: 200, body: '' };
   }
 
-  const sys = `Du bist ein geopolitischer Analyst. Analysiere die Forschungs-These und liefere ein STRUKTURIERTES JSON mit allen beteiligten Ländern und Akteuren.
+  const eventsContext = recentEvents.length
+    ? `\n\nAKTUELLE LIVE-EREIGNISSE (zur Berücksichtigung):\n${recentEvents.slice(0, 50).map(e => '- ' + e).join('\n')}`
+    : '';
 
-Antworte AUSSCHLIESSLICH mit:
+  const sys = `Du bist ein Senior-Geopolitik-Analyst mit Zugriff auf das Web. Erstelle eine TIEFGEHENDE, AUSFÜHRLICHE Analyse der Forschungs-These. Recherchiere im Web nach aktuellen Zahlen, Daten, Programmen, Beschlüssen, Truppenbewegungen, Budgets, Verträgen. Nutze die Web-Suche aktiv für mindestens 5-8 unterschiedliche Aspekte der These.
+
+Antworte AUSSCHLIESSLICH mit folgendem JSON-Schema (alle Felder ausfüllen, sehr ausführlich):
+
 {
-  "summary": "1-2 Sätze zur These und ihrem Kontext",
-  "countries": [
-    {"iso":"DE", "role":"primary|secondary|target|bystander|beneficiary|loser", "intensity":"high|medium|low", "reason":"kurze Begründung"}
-  ],
-  "actors": [
-    {"name":"NATO", "type":"alliance|state|ngo|company|terror|other", "role":"...", "stake":"..."}
-  ],
-  "thesisStrength": "high|medium|low|weak",
-  "contextHints": ["wichtige Kontext-Punkte"],
-  "openQuestions": ["zentrale offene Fragen"]
+  "summary": "5-8 Sätze: ausführliche Kontextualisierung, Zeitleiste, Kern-Spannungsfelder, aktueller Stand",
+  "thesisStrength": "high|medium|low",
+  "thesisAssessment": "3-5 Sätze: detaillierte Begründung der Plausibilität mit konkreten Belegen",
+
+  "countries": [{
+    "iso": "DE",
+    "role": "primary|secondary|target|beneficiary|loser|bystander",
+    "intensity": "high|medium|low",
+    "reason": "3-4 Sätze: warum betroffen, mit konkreten Zahlen, Fakten, Programmen",
+    "currentActivities": ["5-8 konkrete laufende Aktivitäten dieses Landes mit Daten/Zeitraum/Budgets"],
+    "capacities": "2-3 Sätze zu militärischen/wirtschaftlichen/politischen Kapazitäten - konkrete Zahlen",
+    "stake": "was das Land gewinnt/verliert - konkret",
+    "sources": ["max 3 Quellen-URLs oder Titel die du im Web gefunden hast"]
+  }],
+
+  "actors": [{
+    "name": "NATO",
+    "type": "alliance|state|ngo|company|individual|other",
+    "role": "2-3 Sätze",
+    "stake": "konkret",
+    "capabilities": ["5-8 Fähigkeiten/Ressourcen mit Zahlen"],
+    "recentActions": ["5-8 jüngste Aktivitäten mit Datum"],
+    "sources": ["max 3 Quellen"]
+  }],
+
+  "pastActivities": [{
+    "date": "YYYY-MM oder genaues Datum",
+    "event": "Was ist passiert (konkret, mit Zahlen)",
+    "actor": "Wer war beteiligt",
+    "impact": "Welche Auswirkung auf die These",
+    "source": "Quelle wenn Web-recherchiert"
+  }],
+
+  "currentCapacities": {
+    "military": "ausführlich: Truppenstärken, Budgets, Systeme, Programme, mit konkreten Zahlen",
+    "economic": "ausführlich: BIP-Anteile, Handelsvolumen, Sanktionen, Investitionen, Zahlen",
+    "political": "ausführlich: Koalitionen, Beschlüsse, Allianzen, Wahltermine, Mehrheiten",
+    "infrastructure": "Häfen, Pipelines, Bahnverbindungen, Frequenzen, Kapazitäten"
+  },
+
+  "keyNumbers": [{
+    "metric": "z.B. EU-Militärhilfe Ukraine 2022-2024 kumuliert",
+    "value": "z.B. 38,4 Mrd EUR",
+    "context": "1-2 Sätze Einordnung",
+    "year": "2024",
+    "source": "Web-Quelle wenn vorhanden"
+  }],
+
+  "contextHints": ["10-15 wichtige Kontext-Punkte mit Daten, Beschlüssen, Programmen - sehr konkret"],
+
+  "futureScenarios": [{
+    "name": "Kurzname (z.B. 'EU-Konsolidierung')",
+    "probability": "high|medium|low",
+    "timeline": "kurzfristig 3-6M | mittelfristig 1-2J | langfristig 3-5J",
+    "description": "5-8 Sätze: was passiert, welche Akteure, welche Konsequenzen, welche Schritte sind nötig",
+    "drivers": ["5-8 Faktoren die das Szenario wahrscheinlich machen"],
+    "blockers": ["3-5 Faktoren die das Szenario verhindern könnten"],
+    "indicators": ["5-8 beobachtbare Frühwarnindikatoren mit Schwellwerten"]
+  }],
+
+  "monitoringIndicators": [{
+    "indicator": "Was beobachten",
+    "currentValue": "Aktueller Stand mit Zahl",
+    "threshold": "Schwellwert für kritisch",
+    "frequency": "wie oft prüfen"
+  }],
+
+  "openQuestions": ["10-15 präzise zentrale offene Fragen, jede 1-2 Sätze, mit Indikator wie man sie beantworten könnte"],
+  "criticalGaps": ["6-10 wichtige Informationslücken die geschlossen werden müssten"],
+
+  "actionableRecommendations": ["5-8 konkrete Recherche-/Monitoring-Schritte für den Nutzer mit Priorität"]
 }
 
-ISO-Codes immer 2-Buchstaben. Sei umfassend - liste alle Länder die direkt oder indirekt betroffen sind.`;
+WICHTIG:
+- ISO-Codes immer 2-Buchstaben.
+- Länder max 25 (alle direkt+indirekt betroffenen).
+- Akteure max 10.
+- NIE generische Aussagen wie "wichtig für die Region". IMMER konkret mit Zahlen, Daten, Programmnamen, Beschluss-Nummern.
+- Nutze die Web-Suche AKTIV - mindestens 5-8 unterschiedliche Suchen für aktuelle Zahlen und Ereignisse.
+- Auf Deutsch antworten.`;
 
   const userMsg = `These: "${thesis}"
-${baseCountries.length ? `Basis-Länder vom Nutzer/Regelsystem vorgewählt: ${baseCountries.join(', ')}` : ''}${eventsContext}
+${baseCountries.length ? `Basis-Länder (vorgewählt): ${baseCountries.join(', ')}` : ''}${eventsContext}
 
-Beziehe die aktuellen Ereignisse in deine Analyse mit ein. Liefere das strukturierte JSON.`;
+Bitte:
+1. Recherchiere im Web aktuelle Zahlen, Daten, Programme und Ereignisse zur These (5-8 verschiedene Suchen).
+2. Identifiziere alle direkt+indirekt beteiligten Länder (max 25) und Akteure (max 10).
+3. Erstelle eine Zeitleiste vergangener relevanter Aktivitäten (mit Datum).
+4. Bewerte aktuelle Kapazitäten (Militär/Wirtschaft/Politik) mit konkreten Zahlen.
+5. Skizziere 4-6 Zukunftsszenarien mit Wahrscheinlichkeit, Treibern und Indikatoren.
+6. Liste die wichtigsten Kennzahlen mit Quellen.
+7. Formuliere präzise offene Fragen und kritische Informationslücken.
+
+Antworte AUSSCHLIESSLICH mit dem JSON-Schema. Sei AUSFÜHRLICH - das ist eine vollständige Senior-Briefing.`;
+
+  await setJob(jobId, { status: 'running', stage: 'calling_anthropic', started: new Date().toISOString() });
 
   const reqBody = {
-    model: webSearch ? 'claude-sonnet-4-6' : 'claude-sonnet-4-6', // Sonnet auch ohne Websearch - hat ja Zeit
-    max_tokens: 2500,
+    model: 'claude-sonnet-4-6',
+    max_tokens: 12000,
     system: sys,
     messages: [{ role: 'user', content: userMsg }],
   };
   if (webSearch) {
-    reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }];
+    reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 10 }];
   }
 
   try {
-    // Kein Timeout - Background hat 15min
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -90,32 +171,74 @@ Beziehe die aktuellen Ereignisse in deine Analyse mit ein. Liefere das strukturi
 
     if (!res.ok) {
       const errTxt = await res.text().catch(() => '');
-      await setJob(jobId, { status: 'error', error: `API ${res.status}: ${errTxt.slice(0,200)}`, completed: new Date().toISOString() });
+      // Bei Modell-Fehler: Fallback auf Sonnet 4.5
+      if ((res.status === 400 || res.status === 404) && /model/i.test(errTxt)) {
+        console.warn('claude-sonnet-4-6 nicht verfügbar, fallback Sonnet 4.5…');
+        reqBody.model = 'claude-sonnet-4-5';
+        const res2 = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify(reqBody),
+        });
+        if (!res2.ok) {
+          const e2 = await res2.text().catch(() => '');
+          await setJob(jobId, { status: 'error', error: `API ${res2.status}: ${e2.slice(0,300)}`, completed: new Date().toISOString() });
+          return { statusCode: 200, body: '' };
+        }
+        return await processResponse(res2, jobId, reqBody, true);
+      }
+      await setJob(jobId, { status: 'error', error: `API ${res.status}: ${errTxt.slice(0,300)}`, completed: new Date().toISOString() });
       return { statusCode: 200, body: '' };
     }
-
-    const data = await res.json();
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) {
-      await setJob(jobId, { status: 'error', error: 'Kein JSON in Antwort', raw: text.slice(0, 500), completed: new Date().toISOString() });
-      return { statusCode: 200, body: '' };
-    }
-    let parsed;
-    try { parsed = JSON.parse(m[0]); }
-    catch (e) {
-      await setJob(jobId, { status: 'error', error: 'JSON-Parse-Fehler', raw: text.slice(0, 500), completed: new Date().toISOString() });
-      return { statusCode: 200, body: '' };
-    }
-
-    parsed.generated = new Date().toISOString();
-    parsed.model = reqBody.model;
-    parsed.webSearchUsed = !!webSearch;
-
-    await setJob(jobId, { status: 'done', result: parsed, completed: new Date().toISOString() });
+    return await processResponse(res, jobId, reqBody, false);
   } catch (e) {
     await setJob(jobId, { status: 'error', error: e.message, completed: new Date().toISOString() });
   }
   return { statusCode: 200, body: '' };
 };
+
+async function processResponse(res, jobId, reqBody, fallbackUsed) {
+  try {
+    const data = await res.json();
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) {
+      await jobStore().setJSON(jobId, { status: 'error', error: 'Kein JSON in Antwort', raw: text.slice(0, 800), completed: new Date().toISOString() });
+      return { statusCode: 200, body: '' };
+    }
+    let parsed;
+    try { parsed = JSON.parse(m[0]); }
+    catch (e) {
+      await jobStore().setJSON(jobId, { status: 'error', error: 'JSON-Parse-Fehler: ' + e.message, raw: text.slice(0, 800), completed: new Date().toISOString() });
+      return { statusCode: 200, body: '' };
+    }
+
+    parsed.generated = new Date().toISOString();
+    parsed.model = reqBody.model;
+    parsed.webSearchUsed = !!reqBody.tools;
+    parsed.deepAnalysis = true;
+    if (fallbackUsed) parsed.fallbackUsed = `claude-sonnet-4-6 → ${reqBody.model}`;
+    // Web-search citations einsammeln falls vorhanden
+    if (data.content) {
+      const citations = [];
+      data.content.forEach(b => {
+        if (b.type === 'web_search_tool_result' && b.content) {
+          b.content.forEach(c => {
+            if (c.type === 'web_search_result' && c.url) citations.push({ url: c.url, title: c.title || c.url });
+          });
+        }
+      });
+      if (citations.length) parsed.webSources = citations.slice(0, 30);
+    }
+
+    await jobStore().setJSON(jobId, { status: 'done', result: parsed, completed: new Date().toISOString() });
+  } catch (e) {
+    await jobStore().setJSON(jobId, { status: 'error', error: e.message, completed: new Date().toISOString() });
+  }
+  return { statusCode: 200, body: '' };
+}

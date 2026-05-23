@@ -4597,7 +4597,10 @@ function renderProjOverview(body) {
   html += `<div class="proj-thesis"><b style="color:var(--protest)">These:</b><br>${escapeHtml(p.thesis)}</div>`;
 
   html += `<div class="proj-section">
-    <h4>🤖 KI-Analyse <button id="rerunAnalysis">${p.relatedCountries?.length?'↻ Aktualisieren':'⚡ Starten'}</button></h4>`;
+    <h4>🤖 KI-Analyse
+      <button id="rerunAnalysis" title="Schnell: 3 parallele Sonnet-Calls, ~20s, ohne Websuche">${p.relatedCountries?.length?'↻ Schnell-Analyse':'⚡ Starten'}</button>
+      <button id="deepAnalysis" title="Tiefenanalyse mit Web-Recherche, Sonnet 4.6, 1-5 min im Hintergrund" style="margin-left:6px;background:linear-gradient(135deg,#5e5ce6,#bf5af2);color:#fff">🔬 Tiefenanalyse + Web</button>
+    </h4>`;
   // Persistente Fehler-Box bei zuletzt gescheitertem Analyse-Run
   if (_lastProjAnalysisError) {
     const e = _lastProjAnalysisError;
@@ -4630,7 +4633,7 @@ function renderProjOverview(body) {
     </div>`;
   }
   if (p.summary) html += `<div class="proj-thesis" style="border-left-color:var(--accent)">${escapeHtml(p.summary)}</div>`;
-  if (p.thesisStrength) html += `<div style="font-size:11px;color:var(--ink-dim);margin-bottom:8px">Plausibilität der These: <b style="color:var(--accent)">${p.thesisStrength}</b></div>`;
+  if (p.thesisStrength) html += `<div style="font-size:11px;color:var(--ink-dim);margin-bottom:8px">Plausibilität der These: <b style="color:var(--accent)">${p.thesisStrength}</b>${p.thesisAssessment?' — <span style="color:var(--ink-faint)">'+escapeHtml(p.thesisAssessment)+'</span>':''}</div>`;
   if (p.contextHints?.length) {
     html += `<div style="font-size:11px;margin-bottom:8px"><b style="color:var(--protest)">Kontext-Punkte:</b><ul style="margin:5px 0 0 18px;color:var(--ink-dim);line-height:1.6">${p.contextHints.map(h => '<li>'+escapeHtml(h)+'</li>').join('')}</ul></div>`;
   }
@@ -4641,15 +4644,107 @@ function renderProjOverview(body) {
 
   // Akteure
   if (p.actors?.length) {
-    html += `<div class="proj-section"><h4>👥 Beteiligte Akteure</h4><div class="proj-actor-list">`;
+    html += `<div class="proj-section"><h4>👥 Beteiligte Akteure (${p.actors.length})</h4><div class="proj-actor-list">`;
     p.actors.forEach(a => {
-      html += `<div class="proj-actor"><b>${escapeHtml(a.name)}</b><span>${escapeHtml(a.role||'')}</span><span style="display:block;color:var(--ink-faint);font-size:9.5px;margin-top:2px">${escapeHtml(a.type||'')} · ${escapeHtml(a.stake||'')}</span></div>`;
+      html += `<div class="proj-actor"><b>${escapeHtml(a.name)}</b><span>${escapeHtml(a.role||'')}</span><span style="display:block;color:var(--ink-faint);font-size:9.5px;margin-top:2px">${escapeHtml(a.type||'')}${a.stake?' · '+escapeHtml(a.stake):''}</span>`;
+      if (a.capabilities?.length) html += `<div style="font-size:9.5px;color:var(--ink-faint);margin-top:4px"><b style="color:var(--ink-dim)">Fähigkeiten:</b> ${a.capabilities.slice(0,3).map(escapeHtml).join(' · ')}${a.capabilities.length>3?' …':''}</div>`;
+      if (a.recentActions?.length) html += `<div style="font-size:9.5px;color:var(--ink-faint);margin-top:3px"><b style="color:var(--ink-dim)">Aktivitäten:</b> ${a.recentActions.slice(0,2).map(escapeHtml).join(' · ')}${a.recentActions.length>2?' …':''}</div>`;
+      html += `</div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  // Zeitleiste / Past Activities
+  if (p.pastActivities?.length) {
+    html += `<div class="proj-section"><h4>🕒 Zeitleiste (${p.pastActivities.length} Ereignisse)</h4>`;
+    html += `<div style="font-size:11px;line-height:1.6;max-height:280px;overflow-y:auto;padding-right:8px">`;
+    p.pastActivities.forEach(pa => {
+      html += `<div style="margin-bottom:8px;padding-left:10px;border-left:2px solid var(--accent)">
+        <b style="color:var(--accent);font-size:10.5px">${escapeHtml(pa.date||'?')}</b>
+        ${pa.actor?'<span style="color:var(--ink-faint);font-size:10px;margin-left:6px">'+escapeHtml(pa.actor)+'</span>':''}
+        <div style="color:var(--ink);margin-top:2px">${escapeHtml(pa.event||'')}</div>
+        ${pa.impact?'<div style="color:var(--ink-dim);font-size:10.5px;margin-top:2px">→ '+escapeHtml(pa.impact)+'</div>':''}
+      </div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  // Aktuelle Kapazitäten
+  if (p.currentCapacities && Object.values(p.currentCapacities).some(v => v)) {
+    html += `<div class="proj-section"><h4>💪 Aktuelle Kapazitäten</h4><div style="font-size:11px;line-height:1.6">`;
+    if (p.currentCapacities.military) html += `<div style="margin-bottom:6px"><b style="color:#ff453a">Militär:</b> <span style="color:var(--ink-dim)">${escapeHtml(p.currentCapacities.military)}</span></div>`;
+    if (p.currentCapacities.economic) html += `<div style="margin-bottom:6px"><b style="color:#30d158">Wirtschaft:</b> <span style="color:var(--ink-dim)">${escapeHtml(p.currentCapacities.economic)}</span></div>`;
+    if (p.currentCapacities.political) html += `<div style="margin-bottom:6px"><b style="color:#5e5ce6">Politik:</b> <span style="color:var(--ink-dim)">${escapeHtml(p.currentCapacities.political)}</span></div>`;
+    if (p.currentCapacities.infrastructure) html += `<div style="margin-bottom:6px"><b style="color:#bf5af2">Infrastruktur:</b> <span style="color:var(--ink-dim)">${escapeHtml(p.currentCapacities.infrastructure)}</span></div>`;
+    html += `</div></div>`;
+  }
+
+  // Zahlen & Fakten
+  if (p.keyNumbers?.length) {
+    html += `<div class="proj-section"><h4>📊 Zahlen & Fakten (${p.keyNumbers.length})</h4>`;
+    html += `<div style="font-size:11px;display:grid;grid-template-columns:1fr 1fr;gap:8px">`;
+    p.keyNumbers.forEach(k => {
+      html += `<div style="background:var(--panel-2);padding:8px 10px;border-radius:6px;border-left:3px solid var(--accent)">
+        <div style="font-size:14px;font-weight:700;color:var(--accent)">${escapeHtml(k.value||'?')}</div>
+        <div style="font-size:10.5px;color:var(--ink-dim);margin-top:2px">${escapeHtml(k.metric||'')}${k.year?' <span style="color:var(--ink-faint)">('+escapeHtml(k.year)+')</span>':''}</div>
+        ${k.context?'<div style="font-size:9.5px;color:var(--ink-faint);margin-top:4px">'+escapeHtml(k.context)+'</div>':''}
+      </div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  // Zukunfts-Szenarien
+  if (p.futureScenarios?.length) {
+    html += `<div class="proj-section"><h4>🔮 Zukunfts-Szenarien (${p.futureScenarios.length})</h4>`;
+    p.futureScenarios.forEach(s => {
+      const probColor = s.probability === 'high' ? '#ff453a' : s.probability === 'medium' ? '#ff9f0a' : '#30d158';
+      html += `<div style="background:var(--panel-2);padding:10px 12px;margin-bottom:8px;border-radius:8px;border-left:3px solid ${probColor}">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <b style="font-size:12px">${escapeHtml(s.name||'?')}</b>
+          <span style="font-size:10px;background:${probColor};color:#000;padding:2px 8px;border-radius:10px;font-weight:600">${escapeHtml(s.probability||'?')} · ${escapeHtml(s.timeline||'?')}</span>
+        </div>
+        <div style="font-size:11px;color:var(--ink-dim);line-height:1.5">${escapeHtml(s.description||'')}</div>`;
+      if (s.drivers?.length) html += `<div style="font-size:10px;color:var(--ink-faint);margin-top:5px"><b style="color:var(--ink-dim)">Treiber:</b> ${s.drivers.map(escapeHtml).join(' · ')}</div>`;
+      if (s.indicators?.length) html += `<div style="font-size:10px;color:var(--ink-faint);margin-top:3px"><b style="color:var(--ink-dim)">Indikatoren:</b> ${s.indicators.map(escapeHtml).join(' · ')}</div>`;
+      html += `</div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Monitoring-Indikatoren
+  if (p.monitoringIndicators?.length) {
+    html += `<div class="proj-section"><h4>📡 Monitoring-Indikatoren</h4><div style="font-size:11px;line-height:1.6">`;
+    p.monitoringIndicators.forEach(m => {
+      html += `<div style="margin-bottom:6px;padding:6px 10px;background:var(--panel-2);border-radius:6px">
+        <b>${escapeHtml(m.indicator||'?')}</b>
+        <span style="color:var(--ink-faint);margin-left:8px">aktuell: <b style="color:var(--ink-dim)">${escapeHtml(m.currentValue||'?')}</b> · Schwelle: <b style="color:var(--protest)">${escapeHtml(m.threshold||'?')}</b></span>
+      </div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  // Kritische Lücken
+  if (p.criticalGaps?.length) {
+    html += `<div class="proj-section"><h4>❓ Kritische Informationslücken</h4><ul style="font-size:11px;color:var(--ink-dim);line-height:1.6;margin:0 0 0 18px">${p.criticalGaps.map(g => '<li>'+escapeHtml(g)+'</li>').join('')}</ul></div>`;
+  }
+
+  // Empfohlene Schritte
+  if (p.actionableRecommendations?.length) {
+    html += `<div class="proj-section"><h4>✅ Empfohlene nächste Schritte</h4><ul style="font-size:11px;color:var(--ink-dim);line-height:1.6;margin:0 0 0 18px">${p.actionableRecommendations.map(g => '<li>'+escapeHtml(g)+'</li>').join('')}</ul></div>`;
+  }
+
+  // Web-Quellen
+  if (p.webSources?.length) {
+    html += `<div class="proj-section"><h4>🌐 Web-Quellen (${p.webSources.length})</h4><div style="font-size:10.5px;max-height:200px;overflow-y:auto">`;
+    p.webSources.forEach(s => {
+      html += `<div style="margin-bottom:4px"><a href="${escapeHtml(s.url)}" target="_blank" style="color:var(--accent);text-decoration:none">${escapeHtml(s.title || s.url)}</a></div>`;
     });
     html += `</div></div>`;
   }
 
   body.innerHTML = html;
-  document.getElementById('rerunAnalysis')?.addEventListener('click', () => runProjectAnalysis(true));
+  document.getElementById('rerunAnalysis')?.addEventListener('click', () => runProjectAnalysis(false, false));
+  document.getElementById('deepAnalysis')?.addEventListener('click', () => runProjectAnalysis(true, true));
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -5110,41 +5205,129 @@ window.clearProjectAnalysisError = clearProjectAnalysisError;
 function formatAnalysisAsMarkdown(data) {
   let md = '';
   if (data.summary) md += `**Zusammenfassung:** ${data.summary}\n\n`;
-  if (data.thesisStrength) md += `**Plausibilität der These:** ${data.thesisStrength}\n\n`;
+  if (data.thesisStrength) md += `**Plausibilität der These:** ${data.thesisStrength}${data.thesisAssessment?'\n\n_'+data.thesisAssessment+'_':''}\n\n`;
+
   if (data.countries?.length) {
     md += `## Beteiligte Länder (${data.countries.length})\n\n`;
     data.countries.forEach(c => {
       const cName = window.getCountryProfile?.(c.iso)?.name || c.iso;
-      md += `- **${c.iso} ${cName}** _(${c.role || '?'}${c.intensity?', '+c.intensity:''})_: ${c.reason || ''}\n`;
+      md += `### ${c.iso} ${cName} — ${c.role || '?'}${c.intensity?' ('+c.intensity+')':''}\n`;
+      if (c.reason) md += `${c.reason}\n\n`;
+      if (c.capacities) md += `**Kapazitäten:** ${c.capacities}\n\n`;
+      if (c.stake) md += `**Interesse:** ${c.stake}\n\n`;
+      if (c.currentActivities?.length) {
+        md += `**Aktuelle Aktivitäten:**\n`;
+        c.currentActivities.forEach(a => md += `- ${a}\n`);
+        md += '\n';
+      }
+      if (c.sources?.length) md += `_Quellen: ${c.sources.join(', ')}_\n\n`;
     });
-    md += `\n`;
   }
+
   if (data.actors?.length) {
-    md += `## Beteiligte Akteure\n\n`;
+    md += `## Beteiligte Akteure (${data.actors.length})\n\n`;
     data.actors.forEach(a => {
-      md += `- **${a.name}** _(${a.type || '?'})_: ${a.role || ''}${a.stake ? ` — Interesse: ${a.stake}` : ''}\n`;
+      md += `### ${a.name} (${a.type || '?'})\n`;
+      if (a.role) md += `${a.role}\n\n`;
+      if (a.stake) md += `**Stake:** ${a.stake}\n\n`;
+      if (a.capabilities?.length) {
+        md += `**Fähigkeiten:**\n`;
+        a.capabilities.forEach(c => md += `- ${c}\n`);
+        md += '\n';
+      }
+      if (a.recentActions?.length) {
+        md += `**Jüngste Aktivitäten:**\n`;
+        a.recentActions.forEach(c => md += `- ${c}\n`);
+        md += '\n';
+      }
     });
-    md += `\n`;
   }
+
+  if (data.pastActivities?.length) {
+    md += `## Zeitleiste vergangener Aktivitäten\n\n`;
+    data.pastActivities.forEach(p => {
+      md += `- **${p.date || '?'}** — ${p.event || ''}${p.actor?' _('+p.actor+')_':''}${p.impact?' → '+p.impact:''}${p.source?' [Quelle: '+p.source+']':''}\n`;
+    });
+    md += '\n';
+  }
+
+  if (data.currentCapacities) {
+    md += `## Aktuelle Kapazitäten\n\n`;
+    if (data.currentCapacities.military) md += `**Militärisch:** ${data.currentCapacities.military}\n\n`;
+    if (data.currentCapacities.economic) md += `**Wirtschaftlich:** ${data.currentCapacities.economic}\n\n`;
+    if (data.currentCapacities.political) md += `**Politisch:** ${data.currentCapacities.political}\n\n`;
+    if (data.currentCapacities.infrastructure) md += `**Infrastruktur:** ${data.currentCapacities.infrastructure}\n\n`;
+  }
+
+  if (data.keyNumbers?.length) {
+    md += `## Zahlen & Fakten\n\n`;
+    md += `| Kennzahl | Wert | Jahr | Kontext |\n|---|---|---|---|\n`;
+    data.keyNumbers.forEach(k => {
+      md += `| ${k.metric || ''} | **${k.value || ''}** | ${k.year || ''} | ${k.context || ''}${k.source?' ['+k.source+']':''} |\n`;
+    });
+    md += '\n';
+  }
+
   if (data.contextHints?.length) {
     md += `## Kontext-Punkte\n\n`;
     data.contextHints.forEach(h => md += `- ${h}\n`);
     md += `\n`;
   }
+
+  if (data.futureScenarios?.length) {
+    md += `## Zukunfts-Szenarien\n\n`;
+    data.futureScenarios.forEach(s => {
+      md += `### ${s.name || '?'} (${s.probability || '?'}, ${s.timeline || '?'})\n`;
+      if (s.description) md += `${s.description}\n\n`;
+      if (s.drivers?.length) { md += `**Treiber:**\n`; s.drivers.forEach(d => md += `- ${d}\n`); md += '\n'; }
+      if (s.blockers?.length) { md += `**Blocker:**\n`; s.blockers.forEach(d => md += `- ${d}\n`); md += '\n'; }
+      if (s.indicators?.length) { md += `**Frühwarn-Indikatoren:**\n`; s.indicators.forEach(d => md += `- ${d}\n`); md += '\n'; }
+    });
+  }
+
+  if (data.monitoringIndicators?.length) {
+    md += `## Monitoring-Indikatoren\n\n`;
+    data.monitoringIndicators.forEach(m => {
+      md += `- **${m.indicator || '?'}** — aktuell: ${m.currentValue || '?'} · Schwelle: ${m.threshold || '?'}${m.frequency?' · '+m.frequency:''}\n`;
+    });
+    md += '\n';
+  }
+
   if (data.openQuestions?.length) {
     md += `## Offene Fragen\n\n`;
     data.openQuestions.forEach(q => md += `- ${q}\n`);
     md += `\n`;
   }
+
+  if (data.criticalGaps?.length) {
+    md += `## Kritische Informationslücken\n\n`;
+    data.criticalGaps.forEach(g => md += `- ${g}\n`);
+    md += '\n';
+  }
+
+  if (data.actionableRecommendations?.length) {
+    md += `## Empfohlene nächste Schritte\n\n`;
+    data.actionableRecommendations.forEach(r => md += `- ${r}\n`);
+    md += '\n';
+  }
+
+  if (data.webSources?.length) {
+    md += `## Web-Quellen (Recherche)\n\n`;
+    data.webSources.forEach(s => md += `- [${s.title || s.url}](${s.url})\n`);
+    md += '\n';
+  }
+
   return md.trim();
 }
 
-async function runProjectAnalysis(forceWeb = false) {
+async function runProjectAnalysis(forceWeb = false, deepMode = false) {
   if (!activeProject) return;
-  toast('KI analysiert These (3-fach parallel)…');
-  const btn = document.getElementById('rerunAnalysis');
+  const btn = document.getElementById(deepMode ? 'deepAnalysis' : 'rerunAnalysis');
+  const otherBtn = document.getElementById(deepMode ? 'rerunAnalysis' : 'deepAnalysis');
   const origBtnText = btn?.textContent;
-  if (btn) { btn.disabled = true; btn.textContent = '… KI 3-fach parallel'; }
+  if (btn) { btn.disabled = true; }
+  if (otherBtn) otherBtn.disabled = true;
+
   const recentEvents = [];
   (conflictStore || []).slice(0, 20).forEach(e => recentEvents.push(`Konflikt: ${e.n}${e.i?' - '+e.i.slice(0,60):''}`));
   (osintStore || []).slice(0, 10).forEach(it => recentEvents.push(`OSINT [${it.source}]: ${it.title}`));
@@ -5153,8 +5336,38 @@ async function runProjectAnalysis(forceWeb = false) {
   let data = null;
   let bgErr = null;
 
-  // NEU: 3-fach Split parallel. Jede Section <26s → fits in Sync-Budget.
-  // Wallzeit = max(core, context, questions) ≈ 15-20s statt 30s+ sequenziell.
+  // DEEP MODE: direkt Background mit Web-Suche, langes Polling (5 min)
+  if (deepMode) {
+    toast('🔬 Tiefenanalyse läuft (Web-Recherche, 1-5 min)…');
+    if (btn) btn.textContent = '… Web-Recherche';
+    try {
+      data = await window.runBackgroundJob('projectanalyze', {
+        thesis: activeProject.thesis,
+        baseCountries: activeProject.countries,
+        webSearch: true,
+        recentEvents
+      }, {
+        maxWaitSec: 300, // 5 Minuten - genug für 10x Web-Search + Sonnet
+        pollIntervalMs: 4000,
+        onProgress: (i) => {
+          if (btn) btn.textContent = `… Web ${Math.round(i * 4)}s`;
+        }
+      });
+    } catch (e) {
+      bgErr = e;
+      console.warn('Tiefenanalyse fehlgeschlagen:', e.message);
+      toast('Tiefenanalyse fehlgeschlagen: ' + e.message.slice(0, 80));
+      showProjectAnalysisError(e.message, null, null);
+      if (btn) { btn.disabled = false; btn.textContent = origBtnText || '🔬 Tiefenanalyse + Web'; }
+      if (otherBtn) otherBtn.disabled = false;
+      return;
+    }
+    // → springt unten zur Verarbeitung
+  } else {
+
+  // SCHNELL-MODUS: 3-fach Sonnet-Split parallel
+  toast('KI analysiert These (3-fach Sonnet parallel)…');
+  if (btn) btn.textContent = '… 3-fach Sonnet';
   const callSection = async (sectionName) => {
     const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -5251,19 +5464,23 @@ async function runProjectAnalysis(forceWeb = false) {
           const errMsg = parsed.error || `HTTP ${res.status}`;
           toast('KI-Analyse fehlgeschlagen: ' + errMsg);
           showProjectAnalysisError(errMsg + '\n\nSplit-Fehler:\n' + sectionErrors.join('\n'), parsed, bgErr);
-          if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Aktualisieren'; }
+          if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Schnell-Analyse'; }
+          if (otherBtn) otherBtn.disabled = false;
           return;
         }
         data = parsed;
       } catch (syncErr) {
         toast('Sync-Fehler: ' + syncErr.message);
         showProjectAnalysisError(syncErr.message + '\n\nSplit-Fehler:\n' + sectionErrors.join('\n'), null, bgErr);
-        if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Aktualisieren'; }
+        if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Schnell-Analyse'; }
+        if (otherBtn) otherBtn.disabled = false;
         return;
       }
     }
   }
-  // Erfolg → alte Fehler-Box wegräumen
+  } // Ende else (Schnell-Modus)
+
+  // Erfolg in beiden Modi → alte Fehler-Box wegräumen
   clearProjectAnalysisError();
 
   try {
@@ -5273,8 +5490,18 @@ async function runProjectAnalysis(forceWeb = false) {
       actors: data.actors || [],
       summary: data.summary,
       thesisStrength: data.thesisStrength,
+      thesisAssessment: data.thesisAssessment,
       contextHints: data.contextHints || [],
-      openQuestions: data.openQuestions || []
+      openQuestions: data.openQuestions || [],
+      pastActivities: data.pastActivities || [],
+      currentCapacities: data.currentCapacities || null,
+      keyNumbers: data.keyNumbers || [],
+      futureScenarios: data.futureScenarios || [],
+      monitoringIndicators: data.monitoringIndicators || [],
+      criticalGaps: data.criticalGaps || [],
+      actionableRecommendations: data.actionableRecommendations || [],
+      webSources: data.webSources || [],
+      deepAnalysis: !!data.deepAnalysis,
     });
 
     // Analyse ALS EDITIERBARES MATERIAL/DOKUMENT speichern
@@ -5287,7 +5514,7 @@ async function runProjectAnalysis(forceWeb = false) {
       type: 'finding',
       title: `🤖 KI-Analyse vom ${dateLabel}`,
       content: formatAnalysisAsMarkdown(data),
-      source: `KI-Modell: ${data.model || '?'}${data.splitMode ? ' · 3-fach parallel' : ''}${data.fallbackUsed ? ' · Fallback: ' + data.fallbackUsed : ''}${data.webSearchUsed ? ' · mit Web-Suche' : ''}${data.partialErrors?.length ? ' · ⚠ ' + data.partialErrors.length + ' Section-Fehler' : ''}`,
+      source: `KI-Modell: ${data.model || '?'}${data.deepAnalysis ? ' · 🔬 Tiefenanalyse' : data.splitMode ? ' · 3-fach parallel' : ''}${data.fallbackUsed ? ' · Fallback: ' + data.fallbackUsed : ''}${data.webSearchUsed ? ' · mit Web-Suche' : ''}${data.webSources?.length ? ' · ' + data.webSources.length + ' Web-Quellen' : ''}${data.partialErrors?.length ? ' · ⚠ ' + data.partialErrors.length + ' Section-Fehler' : ''}`,
       tags: ['ki-analyse', 'auto', forceWeb ? 'web-suche' : 'offline'],
       isAnalysis: true,
       analysisRaw: data, // Original-JSON für späteren Re-Render
@@ -5297,11 +5524,17 @@ async function runProjectAnalysis(forceWeb = false) {
 
     applyProjectHighlights();
     renderProjectTab('overview');
-    toast(`Analyse fertig: ${(data.countries?.length||0)} Länder · als Dokument im Materialien-Tab gespeichert`);
+    const extras = [];
+    if (data.pastActivities?.length) extras.push(data.pastActivities.length + ' Ereignisse');
+    if (data.keyNumbers?.length) extras.push(data.keyNumbers.length + ' Zahlen');
+    if (data.futureScenarios?.length) extras.push(data.futureScenarios.length + ' Szenarien');
+    if (data.webSources?.length) extras.push(data.webSources.length + ' Web-Quellen');
+    toast(`${data.deepAnalysis?'🔬 Tiefenanalyse':'Analyse'} fertig: ${(data.countries?.length||0)} Länder${extras.length?' · '+extras.join(' · '):''}`);
   } catch (e) {
     toast('Speichern-Fehler: ' + e.message);
   }
-  if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Aktualisieren'; }
+  if (btn) { btn.disabled = false; btn.textContent = origBtnText || (deepMode ? '🔬 Tiefenanalyse + Web' : '↻ Schnell-Analyse'); }
+  if (otherBtn) otherBtn.disabled = false;
 }
 
 function applyProjectHighlights() {
