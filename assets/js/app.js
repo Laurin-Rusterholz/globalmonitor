@@ -4807,7 +4807,13 @@ function openMaterialModal(material = null) {
   document.getElementById('materialModalTitle').textContent = material ? 'Material bearbeiten' : 'Neues Material';
   document.getElementById('matType').value = material?.type || 'note';
   document.getElementById('matTitle').value = material?.title || '';
-  document.getElementById('matContent').value = material?.content || '';
+  const contentEl = document.getElementById('matContent');
+  contentEl.value = material?.content || '';
+  // Lange Dokumente (z.B. KI-Analysen): Textarea größer + Modal breit
+  const isLong = (material?.content?.length || 0) > 400 || material?.isAnalysis;
+  contentEl.rows = isLong ? 22 : 6;
+  const modalBox = document.querySelector('#materialModal .modal-box');
+  if (modalBox) modalBox.classList.toggle('modal-wide', !!isLong);
   document.getElementById('matSource').value = material?.source || '';
   document.getElementById('matCountry').value = material?.countryIso || '';
   document.getElementById('matTags').value = (material?.tags || []).join(', ');
@@ -4818,8 +4824,10 @@ function openMaterialModal(material = null) {
       `<option value="${f.id}"${material?.focusAreaId===f.id?' selected':''}>${escapeHtml(f.name)}</option>`
     ).join('');
   document.getElementById('materialModal').dataset.editId = material?.id || '';
+  // Original-Material-Referenz speichern (für isAnalysis-Flag-Persistenz)
+  document.getElementById('materialModal').dataset.isAnalysis = material?.isAnalysis ? '1' : '';
   openModal('materialModal');
-  setTimeout(() => document.getElementById('matTitle').focus(), 80);
+  setTimeout(() => (isLong ? contentEl : document.getElementById('matTitle')).focus(), 80);
 }
 
 document.getElementById('matWebSearch')?.addEventListener('click', () => {
@@ -5050,15 +5058,52 @@ Antworte präzise, mit konkreten Akteuren, Daten, Zusammenhängen. Deutsch, max 
   document.getElementById('projChatSend').disabled = false;
 }
 
+// Wandelt das Analyse-JSON in editierbares Markdown um (für Material-Erstellung)
+function formatAnalysisAsMarkdown(data) {
+  let md = '';
+  if (data.summary) md += `**Zusammenfassung:** ${data.summary}\n\n`;
+  if (data.thesisStrength) md += `**Plausibilität der These:** ${data.thesisStrength}\n\n`;
+  if (data.countries?.length) {
+    md += `## Beteiligte Länder (${data.countries.length})\n\n`;
+    data.countries.forEach(c => {
+      const cName = window.getCountryProfile?.(c.iso)?.name || c.iso;
+      md += `- **${c.iso} ${cName}** _(${c.role || '?'}${c.intensity?', '+c.intensity:''})_: ${c.reason || ''}\n`;
+    });
+    md += `\n`;
+  }
+  if (data.actors?.length) {
+    md += `## Beteiligte Akteure\n\n`;
+    data.actors.forEach(a => {
+      md += `- **${a.name}** _(${a.type || '?'})_: ${a.role || ''}${a.stake ? ` — Interesse: ${a.stake}` : ''}\n`;
+    });
+    md += `\n`;
+  }
+  if (data.contextHints?.length) {
+    md += `## Kontext-Punkte\n\n`;
+    data.contextHints.forEach(h => md += `- ${h}\n`);
+    md += `\n`;
+  }
+  if (data.openQuestions?.length) {
+    md += `## Offene Fragen\n\n`;
+    data.openQuestions.forEach(q => md += `- ${q}\n`);
+    md += `\n`;
+  }
+  return md.trim();
+}
+
 async function runProjectAnalysis(forceWeb = false) {
   if (!activeProject) return;
   toast('KI analysiert These…');
+  const btn = document.getElementById('rerunAnalysis');
+  const origBtnText = btn?.textContent;
+  if (btn) { btn.disabled = true; }
   const recentEvents = [];
   (conflictStore || []).slice(0, 30).forEach(e => recentEvents.push(`Konflikt: ${e.n}${e.i?' - '+e.i:''}`));
   (osintStore || []).slice(0, 15).forEach(it => recentEvents.push(`OSINT [${it.source}]: ${it.title}`));
   (R?.militaryActions || []).forEach(a => recentEvents.push(`Mil-Aktion: ${a.n} (${a.since}) - ${a.d}`));
 
-  let data;
+  let data = null;
+  let bgErr = null;
   try {
     data = await window.runBackgroundJob('projectanalyze', {
       thesis: activeProject.thesis,
@@ -5066,29 +5111,51 @@ async function runProjectAnalysis(forceWeb = false) {
       webSearch: forceWeb,
       recentEvents
     }, {
-      maxWaitSec: 60,
-      pollIntervalMs: 3000,
+      maxWaitSec: 45,
+      pollIntervalMs: 2500,
       onProgress: (i) => {
-        const btn = document.getElementById('rerunAnalysis');
-        if (btn) btn.textContent = `… KI ${Math.round(i * 3)}s`;
+        if (btn) btn.textContent = `… KI ${Math.round(i * 2.5)}s`;
       }
     });
-  } catch (bgErr) {
-    if (bgErr.message.startsWith('UNSUPPORTED')) {
-      toast('Background nicht aktiv - Sync-Fallback');
-      try {
-        const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ thesis: activeProject.thesis, baseCountries: activeProject.countries, webSearch: false, recentEvents })
-        });
-        const text = await res.text();
-        try { data = JSON.parse(text); }
-        catch { data = { error: 'kein JSON', raw: text.slice(0,200) }; }
-        if (data.error) { toast('Sync-Fehler: ' + data.error); return; }
-      } catch (e) { toast('Sync-Fehler: ' + e.message); return; }
-    } else { toast('Analyse-Fehler: ' + bgErr.message); return; }
+  } catch (e) {
+    bgErr = e;
+    console.warn('Background-Analyse fehlgeschlagen:', e.message);
   }
+
+  // Sync-Fallback IMMER versuchen wenn Background-Resultat fehlt - egal welcher Fehlertyp
+  // (vorher nur bei UNSUPPORTED; bei Timeout 60s blieb der Sync ungenutzt)
+  if (!data || data.error) {
+    if (btn) btn.textContent = '… sync-fallback';
+    toast(bgErr ? `Background: ${bgErr.message.slice(0,60)} – versuche Sync` : 'Sync-Modus');
+    try {
+      const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          thesis: activeProject.thesis,
+          baseCountries: activeProject.countries,
+          webSearch: false, // Sync nutzt nie web_search (zu langsam für 26s-Limit)
+          recentEvents
+        })
+      });
+      const text = await res.text();
+      let parsed;
+      try { parsed = JSON.parse(text); }
+      catch { parsed = { error: 'kein JSON in Response: ' + text.slice(0,200) }; }
+      if (!res.ok || parsed.error) {
+        toast('KI-Analyse fehlgeschlagen: ' + (parsed.error || `HTTP ${res.status}`));
+        if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Aktualisieren'; }
+        return;
+      }
+      data = parsed;
+    } catch (syncErr) {
+      toast('Sync-Fehler: ' + syncErr.message);
+      if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Aktualisieren'; }
+      return;
+    }
+  }
+
   try {
+    // Analyse-Daten ins Projekt speichern (für Highlights + Dashboard)
     await saveProject({
       relatedCountries: data.countries || [],
       actors: data.actors || [],
@@ -5097,10 +5164,32 @@ async function runProjectAnalysis(forceWeb = false) {
       contextHints: data.contextHints || [],
       openQuestions: data.openQuestions || []
     });
+
+    // Analyse ALS EDITIERBARES MATERIAL/DOKUMENT speichern
+    // User kann es danach im Materialien-Tab öffnen, bearbeiten, ergänzen
+    activeProject.materials = activeProject.materials || [];
+    const now = new Date();
+    const dateLabel = now.toLocaleDateString('de-CH') + ' ' + now.toLocaleTimeString('de-CH', {hour:'2-digit',minute:'2-digit'});
+    activeProject.materials.unshift({
+      id: `mat_${Date.now()}_analysis_${Math.random().toString(36).slice(2,6)}`,
+      type: 'finding',
+      title: `🤖 KI-Analyse vom ${dateLabel}`,
+      content: formatAnalysisAsMarkdown(data),
+      source: `KI-Modell: ${data.model || '?'}${data.fallbackUsed ? ' · Fallback: ' + data.fallbackUsed : ''}${data.webSearchUsed ? ' · mit Web-Suche' : ''}`,
+      tags: ['ki-analyse', 'auto', forceWeb ? 'web-suche' : 'offline'],
+      isAnalysis: true,
+      analysisRaw: data, // Original-JSON für späteren Re-Render
+      created: now.toISOString(),
+    });
+    await saveProject();
+
     applyProjectHighlights();
     renderProjectTab('overview');
-    toast('Analyse fertig: ' + (data.countries?.length||0) + ' Länder, ' + (data.actors?.length||0) + ' Akteure');
-  } catch (e) { toast('Speichern-Fehler: ' + e.message); }
+    toast(`Analyse fertig: ${(data.countries?.length||0)} Länder · als Dokument im Materialien-Tab gespeichert`);
+  } catch (e) {
+    toast('Speichern-Fehler: ' + e.message);
+  }
+  if (btn) { btn.disabled = false; btn.textContent = origBtnText || '↻ Aktualisieren'; }
 }
 
 function applyProjectHighlights() {
