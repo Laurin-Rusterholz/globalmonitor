@@ -3720,6 +3720,35 @@ Analysiere die aktuelle Bedeutung, Effektivität, Konfliktrolle, interne Spannun
 }
 
 /* ════════════════════════════════════════════════════════════════
+   BACKGROUND-JOB-HELPER (für AI-Calls > 10s)
+   ════════════════════════════════════════════════════════════════ */
+window.runBackgroundJob = async function(endpoint, payload, opts = {}) {
+  const { maxWaitSec = 120, pollIntervalMs = 2000, onProgress } = opts;
+  const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
+  // Start - 202 wird sofort zurückgegeben
+  const startRes = await fetch(`${CONFIG.BACKEND_BASE}/${endpoint}-background`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({...payload, jobId})
+  });
+  if (!startRes.ok && startRes.status !== 202) {
+    throw new Error(`Background-Start fehlgeschlagen: HTTP ${startRes.status}`);
+  }
+  // Poll
+  const maxIters = Math.ceil(maxWaitSec * 1000 / pollIntervalMs);
+  for (let i = 0; i < maxIters; i++) {
+    await new Promise(r => setTimeout(r, pollIntervalMs));
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/getjob?id=${jobId}`);
+    if (!r.ok) continue;
+    const data = await r.json();
+    if (data.status === 'done') return data.result;
+    if (data.status === 'error') throw new Error(data.error || 'Job-Fehler');
+    if (onProgress) onProgress(i, maxIters, data);
+  }
+  throw new Error(`Timeout nach ${maxWaitSec}s - Job läuft noch (kommt evtl. später in Blobs an)`);
+};
+
+/* ════════════════════════════════════════════════════════════════
    RECHERCHE-PROJEKTE
    ════════════════════════════════════════════════════════════════ */
 let activeProject = null;       // aktuell geladenes Projekt-Objekt
@@ -3821,37 +3850,26 @@ async function suggestProjectCountries() {
     preview.innerHTML = '<i style="color:var(--ink-faint)">Keine Stichwort-Treffer - KI analysiert…</i>';
   }
 
-  // KI im Hintergrund versuchen - falls erfolgreich, ersetzt sie die Regel-Vorschläge
+  // KI im Background-Job - bis 120s erlaubt (Netlify Background Functions)
   const btn = document.getElementById('suggestCountriesBtn');
   const origBtn = btn.textContent;
-  btn.disabled = true; btn.textContent = '… KI verfeinert';
+  btn.disabled = true; btn.textContent = '… KI denkt nach';
 
   try {
-    const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ thesis: combined, baseCountries: ruleHits, webSearch: false })
-    });
-    const text = await res.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { error: 'Server lieferte kein JSON', raw: text.slice(0, 300) }; }
-
-    if (!res.ok || data.error) {
-      console.error('projectanalyze HTTP ' + res.status, data);
-      const detail = data.error || `HTTP ${res.status}`;
-      let hint = '';
-      if (text.includes('credit') || text.includes('balance') || res.status === 402) hint = ' → Anthropic-Guthaben prüfen';
-      else if (res.status === 401) hint = ' → API-Key ungültig';
-      else if (res.status === 429) hint = ' → Rate Limit';
-      else if (res.status === 504 || detail.includes('Timeout') || detail.includes('aborted')) hint = ' → KI zu langsam';
-      // Bei KI-Fehler: Regel-Vorschläge stehen lassen
-      if (ruleHits.length) {
-        preview.innerHTML += `<br><small style="color:var(--ink-faint);font-size:10px">⚠ KI-Verfeinerung fehlgeschlagen: ${escapeHtml(detail)}${hint} - Regel-Vorschläge oben bleiben.</small>`;
-      } else {
-        preview.innerHTML = `<span style="color:var(--conflict)">Fehler: ${escapeHtml(detail)}${hint}</span>`;
+    const data = await window.runBackgroundJob('projectanalyze', {
+      thesis: combined, baseCountries: ruleHits, webSearch: false
+    }, {
+      maxWaitSec: 120,
+      pollIntervalMs: 2500,
+      onProgress: (i, max) => {
+        const sec = Math.round(i * 2.5);
+        btn.textContent = `… KI denkt (${sec}s)`;
+        // Sanfte Erinnerung im Preview alle ~10s
+        if (i > 0 && i % 4 === 0 && ruleHits.length) {
+          preview.innerHTML = preview.innerHTML.replace(/<i[^>]*>KI verfeinert[^<]*<\/i>/, `<i style="color:var(--ink-faint);font-size:10px">KI arbeitet noch (${sec}s)…</i>`);
+        }
       }
-      btn.disabled = false; btn.textContent = origBtn;
-      return;
-    }
+    });
 
     const countries = (data.countries || []).filter(c => c.iso);
     if (countries.length) {
@@ -3863,13 +3881,15 @@ async function suggestProjectCountries() {
           return `<span title="${escapeHtml(c.reason||'')}">${flagEmoji(c.iso)} ${escapeHtml(cName)} <small style="opacity:.7">(${c.role||'?'})</small></span>`;
         }).join(' · ') +
         (countries.length > 15 ? ` <i>+${countries.length-15} weitere</i>` : '');
+    } else {
+      preview.innerHTML += `<br><small style="color:var(--ink-faint)">KI hat keine zusätzlichen Länder gefunden. Regel-Vorschläge bleiben.</small>`;
     }
   } catch (e) {
-    console.error('projectanalyze network', e);
+    console.error('Background-Job-Fehler:', e);
     if (ruleHits.length) {
-      preview.innerHTML += `<br><small style="color:var(--ink-faint);font-size:10px">⚠ KI nicht erreichbar (${escapeHtml(e.message)}) - Regel-Vorschläge stehen.</small>`;
+      preview.innerHTML += `<br><small style="color:var(--ink-faint);font-size:10px">⚠ KI: ${escapeHtml(e.message)} - Regel-Vorschläge bleiben.</small>`;
     } else {
-      preview.innerHTML = `<span style="color:var(--conflict)">Netzwerkfehler: ${escapeHtml(e.message)}</span>`;
+      preview.innerHTML = `<span style="color:var(--conflict)">Fehler: ${escapeHtml(e.message)}</span>`;
     }
   }
   btn.disabled = false; btn.textContent = origBtn;
@@ -4154,19 +4174,21 @@ Antworte präzise, mit konkreten Akteuren, Daten, Zusammenhängen. Deutsch, max 
 
 async function runProjectAnalysis(forceWeb = false) {
   if (!activeProject) return;
-  toast('KI analysiert These…');
+  toast('KI analysiert These (kann 30-90s dauern, läuft im Hintergrund)…');
   try {
-    const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        thesis: activeProject.thesis,
-        baseCountries: activeProject.countries,
-        webSearch: forceWeb
-      })
+    const data = await window.runBackgroundJob('projectanalyze', {
+      thesis: activeProject.thesis,
+      baseCountries: activeProject.countries,
+      webSearch: forceWeb
+    }, {
+      maxWaitSec: 180,
+      pollIntervalMs: 3000,
+      onProgress: (i) => {
+        const sec = Math.round(i * 3);
+        const btn = document.getElementById('rerunAnalysis');
+        if (btn) btn.textContent = `… KI denkt (${sec}s)`;
+      }
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
     await saveProject({
       relatedCountries: data.countries || [],
       actors: data.actors || [],
