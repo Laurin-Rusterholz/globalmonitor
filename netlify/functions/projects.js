@@ -2,10 +2,13 @@
 // Storage: Store "research-projects", Keys "projectId"
 // Pro Projekt: Name, These, Länder, Events, Notizen, Status, Daten
 
-const { getStore } = require('@netlify/blobs');
+let blobsModule;
+try { blobsModule = require('@netlify/blobs'); }
+catch (e) { console.error('@netlify/blobs nicht verfügbar:', e.message); }
 
 function projStore() {
-  return getStore({ name: 'research-projects', consistency: 'strong' });
+  if (!blobsModule) throw new Error('Netlify Blobs nicht verfügbar (Package fehlt)');
+  return blobsModule.getStore({ name: 'research-projects', consistency: 'strong' });
 }
 function json(obj, status = 200) {
   return {
@@ -27,18 +30,28 @@ exports.handler = async (event) => {
         if (!p) return json({ error: 'not found' }, 404);
         return json(p);
       }
-      // List
-      const { blobs } = await store.list();
+      // List - mit robustem Empty-Handling
+      let blobs = [];
+      try {
+        const result = await store.list();
+        blobs = result?.blobs || [];
+      } catch (e) {
+        // Leerer/neuer Store kann list() fail werfen
+        console.warn('store.list fail:', e.message);
+        return json({ projects: [] });
+      }
       const projects = await Promise.all(
         blobs.map(async (b) => {
-          const p = await store.get(b.key, { type: 'json' });
-          return p ? { id: b.key, ...p } : null;
+          try {
+            const p = await store.get(b.key, { type: 'json' });
+            return p ? { id: b.key, ...p } : null;
+          } catch { return null; }
         })
       );
       return json({
         projects: projects
           .filter(Boolean)
-          .sort((a, b) => new Date(b.updated) - new Date(a.updated)),
+          .sort((a, b) => new Date(b.updated || 0) - new Date(a.updated || 0)),
       });
     }
 

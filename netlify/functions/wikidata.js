@@ -1,12 +1,11 @@
-// Wikidata SPARQL-Proxy mit zweistufigem Cache:
-// 1) In-Memory (warm container, sehr schnell)
-// 2) Netlify Blobs (persistent über Cold-Starts)
+// Wikidata SPARQL-Proxy mit zweistufigem Cache + zweistufiger Query
+// (1) Schnelle Basis-Query (immer)  (2) Optional erweiterte für Multi-Werte
 
 const { getStore } = (() => { try { return require('@netlify/blobs'); } catch { return {}; } })();
 
 const memCache = new Map();
-const TTL_MEM = 12 * 60 * 60 * 1000;   // 12h Memory
-const TTL_BLOB = 7 * 24 * 60 * 60 * 1000; // 7d Blob
+const TTL_MEM = 12 * 60 * 60 * 1000;
+const TTL_BLOB = 7 * 24 * 60 * 60 * 1000;
 
 async function getCachedBlob(iso) {
   if (!getStore) return null;
@@ -25,138 +24,151 @@ async function saveCachedBlob(iso, d) {
   } catch (e) { console.warn('Blob write fail:', e.message); }
 }
 
-const QUERY = (iso) => `
-SELECT
-  (SAMPLE(?capitalLabel) AS ?capital)
-  (SAMPLE(?hosLabel) AS ?hos)
-  (SAMPLE(?hosStart) AS ?hosStart_)
-  (SAMPLE(?hogLabel) AS ?hog)
-  (SAMPLE(?hogStart) AS ?hogStart_)
-  (SAMPLE(?population) AS ?pop)
-  (SAMPLE(?govTypeLabel) AS ?govType)
-  (SAMPLE(?currencyLabel) AS ?currency)
-  (SAMPLE(?currencyCode) AS ?currencyCode_)
-  (SAMPLE(?area) AS ?area_)
-  (SAMPLE(?inception) AS ?inception_)
-  (SAMPLE(?demonymLabel) AS ?demonym)
-  (SAMPLE(?iso3) AS ?iso3_)
-  (SAMPLE(?callingCode) AS ?callingCode_)
-  (SAMPLE(?continentLabel) AS ?continent)
-  (SAMPLE(?anthemLabel) AS ?anthem)
-  (GROUP_CONCAT(DISTINCT ?langLabel; separator="|") AS ?languages)
-  (GROUP_CONCAT(DISTINCT ?borderLabel; separator="|") AS ?borders)
-  (GROUP_CONCAT(DISTINCT ?religionLabel; separator="|") AS ?religions)
-  (GROUP_CONCAT(DISTINCT ?memberLabel; separator="|") AS ?memberships)
-WHERE {
+// Schlanke Basis-Query (~1-2s statt 8-30s)
+const BASE_QUERY = (iso) => `
+SELECT ?capitalLabel ?hosLabel ?hosStart ?hogLabel ?hogStart ?population
+       ?govTypeLabel ?currencyLabel ?currencyCode ?area ?inception
+       ?demonymLabel ?iso3 ?callingCode ?continentLabel WHERE {
   ?country wdt:P297 "${iso}".
-  OPTIONAL { ?country wdt:P36 ?capitalQ. ?capitalQ rdfs:label ?capitalLabel. FILTER(LANG(?capitalLabel) IN ("de","en")) }
+  OPTIONAL { ?country wdt:P36 ?capital. }
   OPTIONAL {
-    ?country p:P35 ?hosSt. ?hosSt ps:P35 ?hosQ.
-    FILTER NOT EXISTS { ?hosSt pq:P582 ?endA. }
+    ?country p:P35 ?hosSt. ?hosSt ps:P35 ?hos.
+    FILTER NOT EXISTS { ?hosSt pq:P582 ?e1. }
     OPTIONAL { ?hosSt pq:P580 ?hosStart. }
-    ?hosQ rdfs:label ?hosLabel. FILTER(LANG(?hosLabel) IN ("de","en"))
   }
   OPTIONAL {
-    ?country p:P6 ?hogSt. ?hogSt ps:P6 ?hogQ.
-    FILTER NOT EXISTS { ?hogSt pq:P582 ?endB. }
+    ?country p:P6 ?hogSt. ?hogSt ps:P6 ?hog.
+    FILTER NOT EXISTS { ?hogSt pq:P582 ?e2. }
     OPTIONAL { ?hogSt pq:P580 ?hogStart. }
-    ?hogQ rdfs:label ?hogLabel. FILTER(LANG(?hogLabel) IN ("de","en"))
   }
-  OPTIONAL { ?country p:P1082 ?popSt. ?popSt ps:P1082 ?population. ?popSt pq:P585 ?popDate. }
-  OPTIONAL { ?country wdt:P122 ?govTypeQ. ?govTypeQ rdfs:label ?govTypeLabel. FILTER(LANG(?govTypeLabel) IN ("de","en")) }
-  OPTIONAL { ?country wdt:P38 ?currencyQ. ?currencyQ rdfs:label ?currencyLabel. FILTER(LANG(?currencyLabel) IN ("de","en"))
-             OPTIONAL { ?currencyQ wdt:P498 ?currencyCode. } }
+  OPTIONAL { ?country wdt:P1082 ?population. }
+  OPTIONAL { ?country wdt:P122 ?govType. }
+  OPTIONAL { ?country wdt:P38 ?currency. OPTIONAL { ?currency wdt:P498 ?currencyCode. } }
   OPTIONAL { ?country wdt:P2046 ?area. }
   OPTIONAL { ?country wdt:P571 ?inception. }
-  OPTIONAL { ?country wdt:P1549 ?demonymQ. ?demonymQ rdfs:label ?demonymLabel. FILTER(LANG(?demonymLabel) = "de") }
+  OPTIONAL { ?country wdt:P1549 ?demonym. FILTER(LANG(?demonym) = "de") }
   OPTIONAL { ?country wdt:P298 ?iso3. }
   OPTIONAL { ?country wdt:P474 ?callingCode. }
-  OPTIONAL { ?country wdt:P30 ?continentQ. ?continentQ rdfs:label ?continentLabel. FILTER(LANG(?continentLabel) IN ("de","en")) }
-  OPTIONAL { ?country wdt:P85 ?anthemQ. ?anthemQ rdfs:label ?anthemLabel. FILTER(LANG(?anthemLabel) IN ("de","en")) }
-  OPTIONAL { ?country wdt:P37 ?langQ. ?langQ rdfs:label ?langLabel. FILTER(LANG(?langLabel) = "de") }
-  OPTIONAL { ?country wdt:P47 ?borderQ. ?borderQ rdfs:label ?borderLabel. FILTER(LANG(?borderLabel) = "de") }
-  OPTIONAL { ?country wdt:P140 ?religionQ. ?religionQ rdfs:label ?religionLabel. FILTER(LANG(?religionLabel) = "de") }
-  OPTIONAL { ?country wdt:P463 ?memberQ. ?memberQ rdfs:label ?memberLabel. FILTER(LANG(?memberLabel) IN ("de","en")) }
+  OPTIONAL { ?country wdt:P30 ?continent. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "de,en". }
+} LIMIT 5`;
+
+// Multi-Wert-Query (Sprachen, Nachbarn, Religionen, Mitgliedschaften)
+const MULTI_QUERY = (iso) => `
+SELECT DISTINCT ?type ?label WHERE {
+  ?country wdt:P297 "${iso}".
+  {
+    ?country wdt:P37 ?x. ?x rdfs:label ?label.
+    FILTER(LANG(?label) = "de") BIND("lang" AS ?type)
+  } UNION {
+    ?country wdt:P47 ?x. ?x rdfs:label ?label.
+    FILTER(LANG(?label) = "de") BIND("border" AS ?type)
+  } UNION {
+    ?country wdt:P140 ?x. ?x rdfs:label ?label.
+    FILTER(LANG(?label) = "de") BIND("religion" AS ?type)
+  } UNION {
+    ?country wdt:P463 ?x. ?x rdfs:label ?label.
+    FILTER(LANG(?label) IN ("de","en")) BIND("member" AS ?type)
+  }
+} LIMIT 80`;
+
+async function sparqlFetch(query, timeoutMs = 10000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch('https://query.wikidata.org/sparql?query=' + encodeURIComponent(query), {
+      headers: {
+        'User-Agent': 'GlobalMonitor/1.0 (https://global-monitor.netlify.app)',
+        'Accept': 'application/sparql-results+json'
+      },
+      signal: ctrl.signal
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error('SPARQL ' + res.status + ' ' + txt.slice(0, 80));
+    }
+    return await res.json();
+  } finally { clearTimeout(t); }
 }
-GROUP BY ?country
-LIMIT 1
-`;
 
 exports.handler = async (event) => {
   const iso = (event.queryStringParameters?.iso || '').toUpperCase();
-  if (!iso || iso.length !== 2) return json({error:'iso2 required'}, 400);
+  if (!iso || iso.length !== 2) return json({ error: 'iso2 required' }, 400);
 
-  // 1) Memory-Cache
   const mem = memCache.get(iso);
-  if (mem && Date.now() - mem.t < TTL_MEM) {
-    return json({...mem.d, fromCache:'memory'});
-  }
-  // 2) Blob-Cache (persistent)
+  if (mem && Date.now() - mem.t < TTL_MEM) return json({ ...mem.d, fromCache: 'memory' });
+
   const blob = await getCachedBlob(iso);
   if (blob) {
     memCache.set(iso, blob);
-    return json({...blob.d, fromCache:'blob'});
+    return json({ ...blob.d, fromCache: 'blob' });
   }
 
   try {
-    const url = 'https://query.wikidata.org/sparql?query=' + encodeURIComponent(QUERY(iso));
-    const res = await fetch(url, {
-      headers: { 'User-Agent':'GlobalMonitor/1.0 (https://global-monitor.netlify.app)',
-                 'Accept':'application/sparql-results+json' }
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error('Wikidata ' + res.status + ' ' + t.slice(0,100));
-    }
-    const data = await res.json();
-    const b = data.results?.bindings?.[0];
-    if (!b || (!b.capital && !b.hos && !b.govType)) {
-      const empty = { iso, found:false, sourceUpdated:new Date().toISOString() };
-      memCache.set(iso, {d:empty, t:Date.now()});
+    const baseData = await sparqlFetch(BASE_QUERY(iso));
+    const b = baseData.results?.bindings?.[0];
+    if (!b) {
+      const empty = { iso, found: false, sourceUpdated: new Date().toISOString() };
+      memCache.set(iso, { d: empty, t: Date.now() });
       saveCachedBlob(iso, empty);
       return json(empty);
     }
-
-    function v(k){return b[k]?.value || null;}
-    function vNum(k){const x = v(k); return x ? +x : null;}
-    function vList(k){const x = v(k); return x ? x.split('|').filter(Boolean) : [];}
+    function v(k) { return b[k]?.value || null; }
+    function vNum(k) { const x = v(k); return x ? +x : null; }
 
     const result = {
-      iso, found:true,
-      source:'Wikidata',
+      iso, found: true,
+      source: 'Wikidata',
       sourceUpdated: new Date().toISOString(),
-      capital: v('capital'),
-      headOfState: v('hos'),
-      headOfStateStart: v('hosStart_'),
-      headOfGovernment: v('hog'),
-      headOfGovernmentStart: v('hogStart_'),
-      population: vNum('pop'),
-      govType: v('govType'),
-      currency: v('currency'),
-      currencyCode: v('currencyCode_'),
-      area: vNum('area_'),
-      inception: v('inception_'),
-      demonym: v('demonym'),
-      iso3: v('iso3_'),
-      callingCode: v('callingCode_'),
-      continent: v('continent'),
-      anthem: v('anthem'),
-      languages: vList('languages'),
-      borders: vList('borders'),
-      religions: vList('religions'),
-      memberships: vList('memberships'),
+      capital: v('capitalLabel'),
+      headOfState: v('hosLabel'),
+      headOfStateStart: v('hosStart'),
+      headOfGovernment: v('hogLabel'),
+      headOfGovernmentStart: v('hogStart'),
+      population: vNum('population'),
+      govType: v('govTypeLabel'),
+      currency: v('currencyLabel'),
+      currencyCode: v('currencyCode'),
+      area: vNum('area'),
+      inception: v('inception'),
+      demonym: v('demonymLabel'),
+      iso3: v('iso3'),
+      callingCode: v('callingCode'),
+      continent: v('continentLabel'),
+      languages: [], borders: [], religions: [], memberships: [],
     };
-    memCache.set(iso, {d: result, t: Date.now()});
+
+    // Multi-Werte parallel - aber wenn sie failen, kein Drama
+    try {
+      const multiData = await sparqlFetch(MULTI_QUERY(iso), 8000);
+      (multiData.results?.bindings || []).forEach(row => {
+        const type = row.type?.value;
+        const label = row.label?.value;
+        if (!type || !label) return;
+        if (type === 'lang' && !result.languages.includes(label)) result.languages.push(label);
+        if (type === 'border' && !result.borders.includes(label)) result.borders.push(label);
+        if (type === 'religion' && !result.religions.includes(label)) result.religions.push(label);
+        if (type === 'member' && !result.memberships.includes(label)) result.memberships.push(label);
+      });
+    } catch (e) {
+      console.warn('Multi-query failed (ignored):', e.message);
+    }
+
+    memCache.set(iso, { d: result, t: Date.now() });
     saveCachedBlob(iso, result);
     return json(result);
   } catch (e) {
     console.error('Wikidata error:', e);
-    return json({error: e.message, iso});
+    // Bei Fehler: leeres Result statt 502 zurückgeben
+    const fallback = { iso, found: false, error: e.message, sourceUpdated: new Date().toISOString() };
+    return json(fallback);
   }
 };
 
-function json(obj, status=200) {
-  return { statusCode: status,
-    headers: {'Content-Type':'application/json','Access-Control-Allow-Origin':'*'},
-    body: JSON.stringify(obj) };
+function json(obj, status = 200) {
+  return {
+    statusCode: status,
+    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    body: JSON.stringify(obj)
+  };
 }

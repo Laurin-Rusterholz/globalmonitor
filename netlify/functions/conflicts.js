@@ -38,15 +38,24 @@ exports.handler = async (event) => {
       const timeoutId = setTimeout(() => ctrl.abort(), 7000);
       let res;
       try {
-        res = await fetch(url, { headers: { 'User-Agent':'GlobalMonitor/1.0' }, signal: ctrl.signal });
+        res = await fetch(url, {
+          headers: {
+            'User-Agent':'Mozilla/5.0 (compatible; GlobalMonitor/1.0)',
+            'Accept':'application/json,application/geo+json,*/*'
+          },
+          signal: ctrl.signal
+        });
       } finally { clearTimeout(timeoutId); }
-      if (!res.ok) throw new Error('GDELT ' + res.status);
-      const ctype = res.headers.get('content-type') || '';
-      if (!ctype.includes('json')) {
-        const t = await res.text();
-        throw new Error('GDELT non-JSON: ' + t.slice(0, 80));
+      if (!res.ok) {
+        const sample = await res.text().catch(() => '').then(t => t.slice(0, 200));
+        throw new Error('GDELT ' + res.status + ' URL:' + url.slice(0, 100) + ' body:' + sample);
       }
-      const data = await res.json();
+      const ctype = res.headers.get('content-type') || '';
+      const bodyText = await res.text();
+      if (!ctype.includes('json') && !bodyText.trim().startsWith('{')) {
+        throw new Error('GDELT non-JSON (' + ctype + '): ' + bodyText.slice(0, 100));
+      }
+      const data = JSON.parse(bodyText);
       (data.features || []).forEach(f => {
         const coords = f.geometry?.coordinates;
         if (!coords || coords.length < 2) return;

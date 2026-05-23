@@ -30,17 +30,26 @@ exports.handler = async (event) => {
       }
       // List für Land
       const prefix = iso ? `${iso}/` : '';
-      const { blobs } = await store.list({ prefix });
+      let blobs = [];
+      try {
+        const result = await store.list({ prefix });
+        blobs = result?.blobs || [];
+      } catch (e) {
+        console.warn('notes list fail:', e.message);
+        return json({ notes: [] });
+      }
       const notes = await Promise.all(
         blobs.map(async (b) => {
-          const n = await store.get(b.key, { type: 'json' });
-          return n ? { id: b.key, ...n } : null;
+          try {
+            const n = await store.get(b.key, { type: 'json' });
+            return n ? { id: b.key, ...n } : null;
+          } catch { return null; }
         })
       );
       return json({
         notes: notes
           .filter(Boolean)
-          .sort((a, b) => new Date(b.created) - new Date(a.created)),
+          .sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0)),
       });
     }
 

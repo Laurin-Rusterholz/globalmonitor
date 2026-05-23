@@ -3731,9 +3731,67 @@ function openNewProjectModal(presetThesis = '', presetCountries = []) {
   document.getElementById('newProjName').value = '';
   document.getElementById('newProjThesis').value = presetThesis;
   document.getElementById('newProjCountries').value = presetCountries.join(', ');
+  document.getElementById('suggestPreview').style.display = 'none';
   openModal('newProjectModal');
   setTimeout(() => document.getElementById('newProjName').focus(), 100);
 }
+
+// AI-Länder-Vorschlag aus Projekttitel + These
+async function suggestProjectCountries() {
+  const name = document.getElementById('newProjName').value.trim();
+  const thesis = document.getElementById('newProjThesis').value.trim();
+  const combined = `${name}. ${thesis}`.trim();
+  if (combined.length < 15) return toast('Mehr Titel/These eingeben');
+
+  const btn = document.getElementById('suggestCountriesBtn');
+  const preview = document.getElementById('suggestPreview');
+  btn.disabled = true; const orig = btn.textContent; btn.textContent = '… analysiere';
+  preview.style.display = 'block';
+  preview.innerHTML = '<i>Claude analysiert These und sucht beteiligte Länder…</i>';
+
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/projectanalyze`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ thesis: combined, baseCountries: [], webSearch: false })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const countries = (data.countries || []).filter(c => c.iso);
+    if (!countries.length) {
+      preview.innerHTML = '<span style="color:var(--ink-faint)">Keine Länder erkannt - bitte manuell eingeben.</span>';
+    } else {
+      const isos = countries.map(c => c.iso);
+      document.getElementById('newProjCountries').value = isos.join(', ');
+      preview.innerHTML = `<b style="color:var(--protest)">${countries.length} vorgeschlagen:</b><br>` +
+        countries.slice(0,15).map(c => {
+          const cName = window.getCountryProfile?.(c.iso)?.name || c.iso;
+          return `<span title="${escapeHtml(c.reason||'')}">${flagEmoji(c.iso)} ${escapeHtml(cName)} <small style="opacity:.7">(${c.role||'?'})</small></span>`;
+        }).join(' · ') +
+        (countries.length > 15 ? ` <i>+${countries.length-15} weitere</i>` : '');
+    }
+  } catch (e) {
+    preview.innerHTML = `<span style="color:var(--conflict)">Fehler: ${escapeHtml(e.message)}</span>`;
+  }
+  btn.disabled = false; btn.textContent = orig;
+}
+
+document.getElementById('suggestCountriesBtn')?.addEventListener('click', suggestProjectCountries);
+
+// Auto-Suggest mit Debounce: nach 2s Idle in der These
+let _suggestDebounce = null;
+document.getElementById('newProjThesis')?.addEventListener('input', () => {
+  clearTimeout(_suggestDebounce);
+  const thesis = document.getElementById('newProjThesis').value.trim();
+  const countriesField = document.getElementById('newProjCountries').value.trim();
+  // Nur auto-suggest wenn These lang genug UND Länderfeld leer
+  if (thesis.length < 60 || countriesField.length > 0) return;
+  _suggestDebounce = setTimeout(() => {
+    const preview = document.getElementById('suggestPreview');
+    preview.style.display = 'block';
+    preview.innerHTML = '<i style="color:var(--ink-faint)">Drücke 🤖 Vorschlagen für KI-Empfehlung der relevanten Länder.</i>';
+  }, 1500);
+});
 
 document.getElementById('newProjCreate')?.addEventListener('click', async () => {
   const name = document.getElementById('newProjName').value.trim();
