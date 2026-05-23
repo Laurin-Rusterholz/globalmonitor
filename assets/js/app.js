@@ -180,6 +180,12 @@ async function loadSentinelConfig() {
   } catch (e) { console.warn('Config:', e); }
 }
 
+// Compare-Modus Variablen früh deklarieren (von switchBase referenziert)
+let compareMode = false;
+let compareControl = null;
+let cmpLeftLayer = null;
+let cmpRightLayer = null;
+
 function switchBase(key, btn) {
   if (compareMode) toggleCompare(); // Compare beenden falls aktiv
   document.querySelectorAll('.basemap-btn').forEach(x => x.classList.remove('active'));
@@ -231,11 +237,7 @@ if (satDateInput) {
   });
 }
 
-/* ════ COMPARE-MODUS (Side-by-Side) ════ */
-let compareMode = false;
-let compareControl = null;
-let cmpLeftLayer = null;
-let cmpRightLayer = null;
+/* ════ COMPARE-MODUS (Side-by-Side) - Variablen oben deklariert ════ */
 
 function makeCompareLayer(kind, date) {
   if (kind === 'nasa') return buildNasaLayer(date);
