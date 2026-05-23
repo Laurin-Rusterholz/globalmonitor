@@ -92,6 +92,10 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-siz
 .leaflet-popup-content .row{display:flex;justify-content:space-between;gap:8px;margin-top:4px;font-size:10.5px;color:var(--ink-dim)}
 .leaflet-popup-content .ask-region{display:inline-block;margin-top:8px;padding:4px 9px;background:var(--accent);
   color:#000;border-radius:5px;cursor:pointer;font-size:10px;letter-spacing:.05em}
+.leaflet-popup-content .popup-actions{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;margin-top:8px}
+.leaflet-popup-content .popup-actions button{background:var(--panel-3);border:1px solid var(--line-2);color:var(--ink);
+  border-radius:4px;padding:5px 7px;cursor:pointer;font-family:inherit;font-size:10.5px;text-align:left;line-height:1.2}
+.leaflet-popup-content .popup-actions button:hover{border-color:var(--accent);background:var(--panel-2);color:var(--accent)}
 .leaflet-bar a{background:var(--panel-2);color:var(--ink);border-color:var(--line-2)}
 .leaflet-bar a:hover{background:var(--panel-3)}
 .plane-icon,.ship-icon{font-size:14px;line-height:1;filter:drop-shadow(0 0 3px rgba(159,179,200,.6))}
@@ -225,7 +229,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-siz
   border-top:1px dashed var(--line)}
 
 /* ════ LAND-DOSSIER-MODAL (großes zentriertes Popup) ════ */
-.dossier-box{width:min(95vw,1200px);max-width:1200px;max-height:92vh;display:flex;flex-direction:column}
+.dossier-box{width:min(97vw,1500px);max-width:1500px;max-height:94vh;display:flex;flex-direction:column}
 .dossier-head{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;
   justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap;
   background:linear-gradient(180deg,var(--panel-2),var(--panel));position:relative}
@@ -330,6 +334,10 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-siz
 #askInput:focus{outline:none;border-color:var(--conflict)}
 #sendBtn{background:var(--conflict);border:none;color:#fff;border-radius:8px;padding:0 16px;cursor:pointer;font-size:14px}
 #sendBtn:disabled{opacity:.4;cursor:not-allowed}
+.web-toggle{background:var(--panel-2);border:1px solid var(--line-2);color:var(--ink-dim);border-radius:8px;
+  padding:0 12px;cursor:pointer;font-size:14px}
+.web-toggle:hover{color:var(--ink);border-color:var(--accent)}
+.web-toggle.active{background:var(--accent);color:#000;border-color:var(--accent)}
 .backend-note{font-size:9.5px;color:var(--ink-faint);margin-top:8px;line-height:1.45}
 
 /* ════ BRIEFING PANEL ════ */

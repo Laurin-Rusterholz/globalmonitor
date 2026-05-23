@@ -520,11 +520,24 @@ function setCnt(k, v) {
 }
 
 /* ════ STATIC RENDERING ════ */
+const EVENT_TYPES = new Set(['conflict','battle','protest','thermal','gdeltMil','action','quake','disaster']);
+
 function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
   const safeTitle = String(title).replace(/'/g,"\\'");
-  const askBtn = (lat !== undefined)
-    ? `<br><span class="ask-region" onclick="window.askAboutRegion(${lat},${lng},'${safeTitle}')">→ Land öffnen / KI-Analyse</span>`
-    : '';
+  let actions = '';
+  if (lat !== undefined) {
+    if (EVENT_TYPES.has(sourceKey)) {
+      // Event-Popup mit Analyse-Buttons
+      actions = `<div class="popup-actions">
+        <button onclick="window.analyzeEvent('${sourceKey}',${lat},${lng},'${safeTitle}',false)">💬 Analyse</button>
+        <button onclick="window.analyzeEvent('${sourceKey}',${lat},${lng},'${safeTitle}',true)">🔍 Web-Recherche</button>
+        <button onclick="window.analyzeProfiteers('${sourceKey}',${lat},${lng},'${safeTitle}')">💰 Profiteure</button>
+        <button onclick="window.askAboutRegion(${lat},${lng},'${safeTitle}')">📋 Region</button>
+      </div>`;
+    } else {
+      actions = `<br><span class="ask-region" onclick="window.askAboutRegion(${lat},${lng},'${safeTitle}')">→ Region öffnen</span>`;
+    }
+  }
   let srcHtml = '';
   if (sourceKey && window.SOURCES?.[sourceKey]) {
     const s = window.SOURCES[sourceKey];
@@ -533,8 +546,32 @@ function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
       : s.name;
     srcHtml = `<span class="popup-source">Quelle: ${link}${s.refresh?` · ${s.refresh}`:''}</span>`;
   }
-  return `<b>${title}</b><br>${html}<br><span class="tag" style="background:${tagColor}22;color:${tagColor}">${tagText}</span>${askBtn}${srcHtml}`;
+  return `<b>${title}</b><br>${html}<br><span class="tag" style="background:${tagColor}22;color:${tagColor}">${tagText}</span>${actions}${srcHtml}`;
 }
+
+// Event-Analyse-Funktionen
+window.analyzeEvent = async function(type, lat, lng, title, useWebSearch) {
+  map.closePopup();
+  // Sidemenu öffnen mit Region
+  await openRegion(lat, lng, title);
+  // Auto-Question im AI-Chat triggern
+  const q = useWebSearch
+    ? `Recherchiere aktuell im Web: Was ist über das Ereignis "${title}" bei ${lat.toFixed(2)},${lng.toFixed(2)} bekannt? Welche Quellen berichten was? Wann fand es statt, wer ist involviert, welche Konsequenzen?`
+    : `Analysiere das Ereignis "${title}" bei ${lat.toFixed(2)},${lng.toFixed(2)}: Was ist passiert, wer sind die Akteure, in welchen größeren Konflikt-/Geo-Kontext gehört es?`;
+  askInput.value = q;
+  // Web-Search-Flag temporär aktivieren
+  if (useWebSearch) window._nextAiUseWebSearch = true;
+  sendQuestion();
+};
+
+window.analyzeProfiteers = async function(type, lat, lng, title) {
+  map.closePopup();
+  await openRegion(lat, lng, title);
+  const q = `Wer profitiert vom Ereignis/Konflikt "${title}" bei ${lat.toFixed(2)},${lng.toFixed(2)}? Liste DIREKTE Profiteure (Akteure vor Ort, Waffenlieferanten, Rohstoff-Käufer/Verkäufer) und INDIREKTE Profiteure (geopolitische Rivalen, Drittstaaten, Wirtschaftssektoren). Wer sind die HAUPTVERLIERER? Strukturiere mit **Fettung**. Konkrete Akteure mit Namen.`;
+  askInput.value = q;
+  window._nextAiUseWebSearch = true; // Profiteure-Analyse profitiert von Web-Recherche
+  sendQuestion();
+};
 
 // Auto-Update entfernt - User klickt explizit "→ Land öffnen" im Popup
 
@@ -1505,10 +1542,14 @@ Beantworte präzise, faktenbasiert, mit konkreten Namen (Akteure, Häfen, Pipeli
     return;
   }
 
+  const useWebSearch = !!window._nextAiUseWebSearch || !!window._webSearchPersistent;
+  window._nextAiUseWebSearch = false;
+  if (useWebSearch) el.textContent = 'Recherchiere im Web…';
+
   try {
     const res = await fetch(`${CONFIG.BACKEND_BASE}/ai`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({system:sys, messages:history})
+      body: JSON.stringify({system:sys, messages:history, webSearch: useWebSearch})
     });
     if (!res.ok) throw new Error('HTTP '+res.status);
     const data = await res.json();
@@ -1516,6 +1557,12 @@ Beantworte präzise, faktenbasiert, mit konkreten Namen (Akteure, Häfen, Pipeli
     history.push({role:'assistant', content:text});
     el.classList.remove('thinking');
     renderAi(el, text);
+    if (useWebSearch) {
+      const sourcesNote = document.createElement('div');
+      sourcesNote.style = 'margin-top:6px;font-size:9.5px;color:var(--ink-faint);font-style:italic';
+      sourcesNote.textContent = '🔍 Mit Online-Recherche generiert';
+      el.appendChild(sourcesNote);
+    }
   } catch (err) {
     el.classList.remove('thinking');
     el.textContent = 'Fehler: ' + err.message;
@@ -1871,31 +1918,30 @@ function countryColor(iso, mode) {
   return '#444';
 }
 
-let selectedCountryIso = null;
-let selectedCountryLayer = null;
+// Multi-Select: Map iso -> Leaflet layer (für persistenten lila Highlight)
+const selectedCountries = new Map();
 
 function buildPoliticalLayer(mode) {
   if (!countriesGeoJson) return null;
   const layer = L.geoJSON(countriesGeoJson, {
-    style: f => ({
-      fillColor: countryColor(getCountryIso(f), mode),
-      color: '#0c1117', weight: 0.6, fillOpacity: 0.55, opacity: 0.8
-    }),
+    style: f => {
+      const iso = getCountryIso(f);
+      const isSel = selectedCountries.has(iso);
+      return {
+        fillColor: isSel ? '#a855f7' : countryColor(iso, mode),
+        color: isSel ? '#a855f7' : '#0c1117',
+        weight: isSel ? 3.5 : 0.6,
+        fillOpacity: isSel ? 0.55 : 0.5,
+        opacity: 0.85
+      };
+    },
     onEachFeature: (f, l) => {
       const iso = getCountryIso(f);
       const profile = window.getCountryProfile?.(iso);
       const name = profile?.name || f.properties?.NAME || f.properties?.name || iso || '?';
       l.on('click', (e) => {
         L.DomEvent.stopPropagation(e);
-        // Shift+Klick: direkt zum Vergleich hinzufügen
-        if (e.originalEvent?.shiftKey) {
-          toggleCompareCountry(iso, name);
-          highlightCountry(iso, l);
-          return;
-        }
-        // Normaler Klick: nur highlighten + Aktions-Popup
-        highlightCountry(iso, l);
-        showCountryActionPopup(e.latlng, iso, name);
+        toggleSelectAndCompare(iso, name, l, e.latlng);
       });
       l.bindTooltip(name, { sticky: true, direction: 'top', className: 'leaflet-tooltip' });
     }
@@ -1903,45 +1949,38 @@ function buildPoliticalLayer(mode) {
   return layer;
 }
 
-function highlightCountry(iso, layer) {
-  // Vorherige Auswahl zurücksetzen
-  if (selectedCountryLayer) {
-    try { selectedCountryLayer.setStyle({ weight: 0.6, color: '#0c1117' }); } catch {}
+function toggleSelectAndCompare(iso, name, layer, latlng) {
+  if (selectedCountries.has(iso)) {
+    // Deselect
+    selectedCountries.delete(iso);
+    try { layer.setStyle({ weight: 0.6, color: '#0c1117', fillColor: countryColor(iso, 'political'), fillOpacity: 0.5 }); } catch {}
+    const idx = comparedCountries.findIndex(c => c.iso === iso);
+    if (idx >= 0) { comparedCountries.splice(idx, 1); persistCompared(); renderBasket(); }
+    toast(`${name} abgewählt`);
+  } else {
+    // Select - lila Highlight
+    selectedCountries.set(iso, layer);
+    try {
+      layer.setStyle({ weight: 3.5, color: '#a855f7', fillColor: '#a855f7', fillOpacity: 0.55 });
+      layer.bringToFront();
+    } catch {}
+    addToCompareSilent(iso, name);
+    toast(`✓ ${name} ausgewählt (${selectedCountries.size} total) — Sidemenu rechts → "Vollprofil" für Popup`);
   }
-  selectedCountryIso = iso;
-  selectedCountryLayer = layer;
-  try {
-    layer.setStyle({ weight: 3, color: '#21c7d6' });
-    layer.bringToFront();
-  } catch {}
+  // Sidemenu öffnen mit zuletzt geklicktem Land
+  openRegion(latlng.lat, latlng.lng, name, iso);
 }
 
-function showCountryActionPopup(latlng, iso, name) {
-  const flag = flagEmoji(iso);
-  const inBasket = comparedCountries.some(c => c.iso === iso);
-  const html = `<div class="cap-inner">
-    <div class="cap-head"><span class="cap-flag">${flag}</span><span class="cap-name">${escapeHtml(name)}</span></div>
-    <div class="cap-btns">
-      <button onclick="window.openCountryDossier('${iso}','${name.replace(/'/g,"\\'")}')">📋 Vollständiges Profil</button>
-      <button onclick="window.toggleCompareCountry('${iso}','${name.replace(/'/g,"\\'")}')">${inBasket?'✓ Im Vergleich':'➕ Zum Vergleich'}</button>
-      <button onclick="window.openCountryChat(${latlng.lat},${latlng.lng},'${name.replace(/'/g,"\\'")}','${iso}')">💬 KI-Chat</button>
-      <button onclick="window.generateQuickDossier('${iso}','${name.replace(/'/g,"\\'")}','military')">🛡 Militär-Analyse</button>
-    </div>
-  </div>`;
-  L.popup({ className: 'country-action-popup', closeButton: true, autoPan: true })
-    .setLatLng(latlng)
-    .setContent(html)
-    .openOn(map);
+async function addToCompareSilent(iso, name) {
+  if (comparedCountries.find(c => c.iso === iso)) return;
+  if (comparedCountries.length >= 6) { toast('Max 6 Länder im Vergleich'); return; }
+  const live = await fetchWikidata(iso);
+  const economic = await fetchEconomic(iso);
+  const profile = window.getCountryProfile?.(iso);
+  comparedCountries.push({ iso, name, profile, live, economic });
+  persistCompared();
+  renderBasket();
 }
-
-window.openCountryChat = function(lat, lng, name, iso) {
-  map.closePopup();
-  openRegion(lat, lng, name, iso);
-};
-window.generateQuickDossier = function(iso, name, scope) {
-  map.closePopup();
-  openCountryDossier(iso, name, scope);
-};
 
 async function activatePoliticalMap() {
   await ensureCountriesGeoJson();
@@ -3251,6 +3290,14 @@ ${countriesText}`;
 document.getElementById('cmpAskAi')?.addEventListener('click', () => askAiComparison());
 document.querySelectorAll('#comparePanel .chip').forEach(c => c.onclick = () => askAiComparison(c.dataset.cq));
 document.getElementById('noteSaveBtn')?.addEventListener('click', saveNote);
+
+// Web-Search-Toggle für AI-Chat (persistent)
+window._webSearchPersistent = false;
+document.getElementById('webSearchToggle')?.addEventListener('click', (e) => {
+  window._webSearchPersistent = !window._webSearchPersistent;
+  e.currentTarget.classList.toggle('active', window._webSearchPersistent);
+  toast(window._webSearchPersistent ? '🔍 Online-Recherche dauerhaft aktiv' : 'Online-Recherche aus');
+});
 
 /* ════ START ════ */
 buildCategoryUI();
