@@ -466,6 +466,10 @@ select.tb-btn{appearance:none;padding-right:24px;background-image:linear-gradien
 .modal{position:fixed;inset:0;background:rgba(7,10,15,.7);z-index:3000;display:none;
   align-items:center;justify-content:center;backdrop-filter:blur(4px)}
 .modal.open{display:flex}
+/* Gestackte Modals: docModal/noteEditModal/materialModal liegen ÜBER countryDossierModal */
+#docModal{z-index:3100;background:rgba(7,10,15,.6)}
+#noteEditModal{z-index:3110}
+#materialModal{z-index:3110}
 .modal-box{background:var(--panel);border:1px solid var(--line-2);border-radius:12px;
   width:min(90vw,500px);max-height:85vh;display:flex;flex-direction:column;
   box-shadow:0 30px 80px rgba(0,0,0,.6)}

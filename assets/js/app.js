@@ -296,9 +296,20 @@ function openSidePanel(id) {
   });
   document.getElementById(id)?.classList.add('open');
 }
+// Welche Modals dürfen GLEICHZEITIG mit anderen offen sein?
+// Beispiel: docModal (geöffnete Notiz) sitzt OBEN auf countryDossierModal -
+// Schliesst die Notiz, bleibt das Länder-Profil offen.
+const MODAL_STACKABLE_OVER = {
+  'docModal': ['countryDossierModal', 'notesOverviewModal'],
+  'noteEditModal': ['countryDossierModal'],
+  'materialModal': ['countryDossierModal'],
+};
 function openModal(id) {
+  const keepOpen = MODAL_STACKABLE_OVER[id] || [];
   MODALS.forEach(m => {
-    if (m !== id) document.getElementById(m)?.classList.remove('open');
+    if (m !== id && !keepOpen.includes(m)) {
+      document.getElementById(m)?.classList.remove('open');
+    }
   });
   document.getElementById(id)?.classList.add('open');
 }
