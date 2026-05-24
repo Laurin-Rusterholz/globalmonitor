@@ -847,23 +847,49 @@ function setCnt(k, v) {
 /* ════ STATIC RENDERING ════ */
 const EVENT_TYPES = new Set(['conflict','battle','protest','thermal','gdeltMil','action','quake','disaster']);
 
+// tagText → kontextuelles Topic für Web-Suche (z.B. "Sanktioniert" → "Sanktionen")
+const WEBSEARCH_TOPIC_MAP = {
+  'Sanktioniert': 'Sanktionen',
+  'Atomkraftwerk': 'Atomkraftwerk',
+  'Militärbasis': 'Militärbasis',
+  'Militärhafen': 'Marinebasis',
+  'Luftwaffe': 'Luftwaffenstützpunkt',
+  'Militäraktion': 'Militäroperation',
+  'Militärübung': 'Militärübung',
+  'Hafen': 'Hafen',
+  'Chokepoint': 'Schifffahrtsroute',
+  'Startplatz': 'Raumfahrtbahnhof',
+  'BRI': 'Belt and Road Initiative',
+  'lithium': 'Lithium-Vorkommen',
+  'rare_earth': 'Seltene Erden',
+  'cobalt': 'Kobalt-Mine',
+  'copper': 'Kupfermine',
+  'uranium': 'Uran-Mine',
+  'iron': 'Eisenerz-Mine',
+  'oil': 'Ölfeld',
+  'gas': 'Gasfeld',
+};
+
 function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
   const safeTitle = String(title).replace(/'/g,"\\'");
+  const topic = WEBSEARCH_TOPIC_MAP[tagText] || tagText || '';
+  const safeTopic = String(topic).replace(/'/g,"\\'");
+  const searchHint = safeTopic ? `'${safeTitle}' '${safeTopic}'` : `'${safeTitle}'`;
   let actions = '';
   if (lat !== undefined) {
     if (EVENT_TYPES.has(sourceKey)) {
       // Event-Popup mit allen Analyse-Buttons
       actions = `<div class="popup-actions">
         <button onclick="window.analyzeEvent('${sourceKey}',${lat},${lng},'${safeTitle}',false)">💬 KI</button>
-        <button onclick="window.openWebsearch('${safeTitle}','news')" title="Google-Suche mit News-Quellen">🌐 Web</button>
+        <button onclick="window.openWebsearch('${safeTitle}','news','${safeTopic}')" title="Google-Suche: ${searchHint}">🌐 Web</button>
         <button onclick="window.analyzeEvent('${sourceKey}',${lat},${lng},'${safeTitle}',true)">🔍 KI+Web</button>
         <button onclick="window.analyzeProfiteers('${sourceKey}',${lat},${lng},'${safeTitle}')">💰 Profiteure</button>
         <button onclick="window.askAboutRegion(${lat},${lng},'${safeTitle}')">📋 Region</button>
       </div>`;
     } else {
-      // Generisches Popup (Häfen/Basen/AKW/etc) - Web + KI Buttons immer dabei
+      // Generisches Popup (Häfen/Basen/AKW/etc) - Web-Suche mit Kontext: "Name" "Topic"
       actions = `<div class="popup-actions">
-        <button onclick="window.openWebsearch('${safeTitle}','news')" title="Web-Suche mit News-Quellen">🌐 Web</button>
+        <button onclick="window.openWebsearch('${safeTitle}','news','${safeTopic}')" title="Google-Suche: ${searchHint}">🌐 Web</button>
         <button onclick="window.askAboutRegion(${lat},${lng},'${safeTitle}')">📋 Region öffnen</button>
       </div>`;
     }
@@ -882,20 +908,32 @@ function popup(title, html, tagColor, tagText, lat, lng, sourceKey) {
 // Event-Analyse-Funktionen
 // Web-Suche - öffnet Google in neuem Tab
 // Strip Emoji-Symbole und Sonderzeichen aus dem Query, keine Site-Restriktionen
-window.openWebsearch = function(query, scope = 'news') {
-  // Emoji/Symbole entfernen, doppelte Leerzeichen normalisieren
-  const cleaned = String(query || '')
-    .replace(/[☀-➿-\uD83C-􏰀-\uDFFF]/g, '')
+// Helper: strippt Emojis/Symbole, normalisiert Whitespace
+function _gmCleanSearchQuery(s) {
+  return String(s || '')
+    .replace(/[☀-➿\uD83C-\uDBFF][\uDC00-\uDFFF]?/g, '')
     .replace(/[^\p{L}\p{N}\s\-\.,\/]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!cleaned) return toast('Kein Suchbegriff');
-  let q = cleaned;
+}
+// openWebsearch(name, scope='news', topic=null)
+// Bei (name, scope, topic): kontextuell "Name" "Topic" (Belarus + Sanktionen → "Belarus" "Sanktionen")
+// Bei (query, scope): Plain-Search wie vorher (Backwards-Compat)
+window.openWebsearch = function(query, scope = 'news', topic = null) {
+  const cleanedName = _gmCleanSearchQuery(query);
+  if (!cleanedName) return toast('Kein Suchbegriff');
+  let q;
+  if (topic) {
+    const cleanedTopic = _gmCleanSearchQuery(topic);
+    // Quoted Phrases für präzise Treffer
+    q = cleanedTopic ? `"${cleanedName}" "${cleanedTopic}"` : `"${cleanedName}"`;
+  } else {
+    q = cleanedName;
+  }
   if (scope === 'recent') {
     const lastMonth = new Date(Date.now() - 30*86400000).toISOString().slice(0,10);
     q += ` after:${lastMonth}`;
   }
-  // Quellen-Restriktion entfernt - User will offene Suche
   const url = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
   window.open(url, '_blank', 'noopener');
 };
