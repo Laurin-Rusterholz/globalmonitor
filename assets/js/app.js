@@ -127,6 +127,29 @@ function repairTruncatedJSON(s) {
 }
 
 window.USE_DIRECT_ANTHROPIC = USE_DIRECT_ANTHROPIC;
+
+// Unified AI-Call: nutzt direct-Browser wenn Key gesetzt, sonst Netlify /ai.
+// Returns: Anthropic-Response-Shape (data.content[] mit type/text). Drop-in
+// für vorhandene fetch('${BACKEND}/ai') Aufrufe.
+async function callAi({ system, messages, webSearch = false, maxTokens = 1500, model = 'claude-sonnet-4-6' }) {
+  if (USE_DIRECT_ANTHROPIC) {
+    const reqBody = { model, max_tokens: maxTokens, system, messages };
+    if (webSearch) reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }];
+    return await callAnthropicDirect(reqBody);
+  }
+  const res = await fetch(`${CONFIG.BACKEND_BASE}/ai`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ system, messages, webSearch, maxTokens, model })
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status}: ${t.slice(0,200)}`);
+  }
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
 if (USE_DIRECT_ANTHROPIC) {
   console.info('%c✅ Direct-Anthropic aktiv (Browser→Anthropic, kein 26s-Limit)', 'color:#30d158;font-weight:600');
 } else {
@@ -1714,22 +1737,45 @@ async function doAiUpdate(iso2) {
   if (btn) { btn.disabled = true; btn.textContent = '… KI fragt'; }
   try {
     const profile = window.getCountryProfile?.(iso2);
-    const res = await fetch(`${CONFIG.BACKEND_BASE}/aiupdate`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        iso: iso2,
-        countryName: profile?.name || currentRegion?.name || iso2,
-        currentData: {
-          leader: profile?.leader,
-          ruling: profile?.ruling,
-          nextElection: profile?.nextElection,
-          context: profile?.context
-        }
-      })
-    });
-    if (!res.ok) throw new Error('HTTP '+res.status);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
+    const countryName = profile?.name || currentRegion?.name || iso2;
+    const currentData = {
+      leader: profile?.leader, ruling: profile?.ruling,
+      nextElection: profile?.nextElection, context: profile?.context
+    };
+    let data;
+    if (USE_DIRECT_ANTHROPIC) {
+      const sys = `Du bist präziser geopolitischer Daten-Assistent. Aktualisiere das Profil eines Landes basierend auf aktuellstem Wissen. Antworte AUSSCHLIESSLICH mit JSON:
+{
+  "leader": "Aktuelle Führung mit Amtsbeginn",
+  "ruling": "Regierungspartei oder Koalition",
+  "nextElection": "Nächste Wahl (Monat/Jahr, Art)",
+  "context": "3-5 Sätze aktueller politischer Kontext mit Zahlen, Ereignissen, Beschlüssen",
+  "notes": "Besondere Notizen mit Zahlen/Daten",
+  "recentEvents": ["5-8 wichtige Ereignisse der letzten 12 Monate mit Datum"],
+  "keyFigures": ["3-5 zentrale Persönlichkeiten neben Staatsführung"],
+  "sourceNote": "Wissensstand-Hinweis",
+  "confidence": "high|medium|low"
+}
+Bei Unsicherheit confidence "low". Auf Deutsch.`;
+      const userMsg = `Land: ${countryName} (${iso2})\n\nAktuell gespeicherte Daten:\n${JSON.stringify(currentData, null, 2)}\n\nBitte aktualisieren. JSON liefern.`;
+      const apiData = await callAnthropicDirect({
+        model: 'claude-sonnet-4-6', max_tokens: 1500,
+        system: sys, messages: [{ role: 'user', content: userMsg }]
+      });
+      const { text, stopReason, model } = extractAnthropicResult(apiData);
+      const { parsed } = parseModelJson(text, stopReason);
+      parsed.sourceUpdated = new Date().toISOString();
+      parsed.source = `KI (${model})`;
+      data = parsed;
+    } else {
+      const res = await fetch(`${CONFIG.BACKEND_BASE}/aiupdate`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ iso: iso2, countryName, currentData })
+      });
+      if (!res.ok) throw new Error('HTTP '+res.status);
+      data = await res.json();
+      if (data.error) throw new Error(data.error);
+    }
     currentRegion.aiUpdate = data;
     toast(`KI-Update (Confidence: ${data.confidence||'?'})`);
     renderCountryInfo(iso2, profile, currentRegion.economic, currentRegion.live);
@@ -1832,12 +1878,7 @@ Beantworte präzise, faktenbasiert, mit konkreten Namen (Akteure, Häfen, Pipeli
   if (useWebSearch) el.textContent = 'Recherchiere im Web…';
 
   try {
-    const res = await fetch(`${CONFIG.BACKEND_BASE}/ai`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({system:sys, messages:history, webSearch: useWebSearch})
-    });
-    if (!res.ok) throw new Error('HTTP '+res.status);
-    const data = await res.json();
+    const data = await callAi({ system: sys, messages: history, webSearch: useWebSearch, maxTokens: 2500 });
     const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim() || '(Keine Antwort)';
     history.push({role:'assistant', content:text});
     el.classList.remove('thinking');
@@ -2043,12 +2084,7 @@ LIVE-DATEN-SNAPSHOT (Zeitfenster: ${timeWindow}):
 ${gatherGlobalContext()}`;
 
   try {
-    const res = await fetch(`${CONFIG.BACKEND_BASE}/ai`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ system: sys, messages: briefingHistory })
-    });
-    if (!res.ok) throw new Error('HTTP '+res.status);
-    const data = await res.json();
+    const data = await callAi({ system: sys, messages: briefingHistory, maxTokens: 2500 });
     const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim() || '(Keine Antwort)';
     briefingHistory.push({ role:'assistant', content:text });
     const th = document.getElementById('briefingThink');
@@ -4082,11 +4118,7 @@ LÄNDER:
 ${countriesText}`;
 
   try {
-    const res = await fetch(`${CONFIG.BACKEND_BASE}/ai`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ system:sys, messages:[{role:'user', content:focus}] })
-    });
-    const data = await res.json();
+    const data = await callAi({ system: sys, messages: [{role:'user', content: focus}], maxTokens: 2000 });
     const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim() || '(keine Antwort)';
     answer.innerHTML = text.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
     // Auto-Save Vergleichs-Analyse als Notiz für jedes beteiligte Land
@@ -4233,11 +4265,7 @@ ${o.role ? 'Bekannte Rolle: ' + o.role : ''}
 Analysiere die aktuelle Bedeutung, Effektivität, Konfliktrolle, interne Spannungen, Reformbedarf.`;
 
   try {
-    const res = await fetch(`${CONFIG.BACKEND_BASE}/ai`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({system:sys, messages:[{role:'user', content:msg}], webSearch:true})
-    });
-    const data = await res.json();
+    const data = await callAi({ system: sys, messages: [{role:'user', content: msg}], webSearch: true, maxTokens: 2500 });
     const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim() || '(keine Antwort)';
     resultBox.innerHTML = `<h4>🤖 KI-Analyse <span class="src-badge src-ai">AI + Web</span></h4><div style="line-height:1.6;color:var(--ink);white-space:pre-wrap">${escapeHtml(text).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}</div>`;
     // Auto-Save als Recherche
@@ -5539,11 +5567,7 @@ ${ctx}
 
 Antworte präzise, mit konkreten Akteuren, Daten, Zusammenhängen. Deutsch, max 350 Wörter.`;
   try {
-    const res = await fetch(`${CONFIG.BACKEND_BASE}/ai`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({system:sys, messages:activeProject.chatHistory, webSearch: useWeb})
-    });
-    const data = await res.json();
+    const data = await callAi({ system: sys, messages: activeProject.chatHistory, webSearch: useWeb, maxTokens: 2500 });
     const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim() || '(keine Antwort)';
     activeProject.chatHistory.push({role:'assistant', content:text});
     renderProjChatHistory();
