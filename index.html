@@ -62,6 +62,7 @@
       <button class="tb-btn" id="researchBtn" title="Recherche-Archiv">🗃<span class="tb-label">Recherche</span></button>
       <button class="tb-btn" id="orgsBtn" title="Internationale Organisationen">🏛<span class="tb-label">Orgs</span></button>
       <button class="tb-btn" id="threeDBtn" title="3D-Globe (Cesium) - mit Tastatur/Maus navigieren">🌍<span class="tb-label">3D</span></button>
+      <button class="tb-btn" id="addElementBtn" title="Element hinzufügen (Basis, AKW, Rohstoff, Ereignis usw.)">➕<span class="tb-label">Element</span></button>
       <button class="tb-btn" id="apiKeyBtn" title="Anthropic API-Key (direkter Browser-Zugriff, kein Netlify-Limit)">🔑<span class="tb-label">API-Key</span></button>
       <button class="tb-btn" id="newProjectBtn" title="Neues Recherche-Projekt" style="background:var(--accent);color:#000;border-color:var(--accent)">＋<span class="tb-label">Projekt</span></button>
       <select class="tb-btn" id="timeWindow" title="Zeitfenster für Konflikt-Live-Daten">
@@ -116,6 +117,7 @@
       <div class="ctx-item" data-act="project">🔬 Neues Projekt zu dieser Region</div>
       <div class="ctx-item" data-act="ai">💬 KI-Chat zu dieser Region</div>
       <div class="ctx-item" data-act="pin">📌 Pin hier setzen</div>
+      <div class="ctx-item" data-act="addElement">➕ Element hinzufügen (Basis, AKW, Rohstoff, …)</div>
       <div class="ctx-item" data-act="measure">📏 Distanz von hier messen</div>
       <div class="ctx-item" data-act="copy">📋 Koordinaten kopieren</div>
       <div class="ctx-item" data-act="zoom">🔍 Hier reinzoomen</div>
@@ -205,6 +207,79 @@
         <b>Tipp:</b> Auf <a href="https://console.anthropic.com/settings/limits" target="_blank" style="color:var(--accent)">console.anthropic.com/settings/limits</a>
         kannst du ein Tages-/Monats-Spending-Limit setzen, falls jemand den Key extrahiert.
         Empfehlung: $5-20/Tag, das reicht für intensive Nutzung dieser App.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Element-hinzufügen Modal: User-definierte Elemente (Basis, AKW, Rohstoff, Ereignis usw.) -->
+<div id="addElementModal" class="modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2>➕ Eigenes Element hinzufügen</h2>
+      <button class="closeBtn" data-close="addElementModal">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-info" style="font-size:11px;line-height:1.5">
+        Erstelle ein eigenes Element auf der Karte. Es bekommt das gleiche Symbol und die gleichen
+        Aktionen (Web-Suche, KI-Analyse, Region öffnen) wie native Elemente. Wird im Browser
+        persistiert (localStorage).
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px">
+        <label class="lbl-row" style="flex-direction:column;align-items:stretch;gap:4px">
+          <span>Kategorie</span>
+          <select id="aeCategory" style="padding:8px;border-radius:6px;background:var(--panel-2);color:var(--ink);border:1px solid var(--panel-3)">
+            <option value="events">Ereignisse</option>
+            <option value="energy">Energie</option>
+            <option value="resources">Rohstoffe</option>
+            <option value="maritime">Maritim</option>
+            <option value="military">Militär</option>
+            <option value="politics">Politik & Wirtschaft</option>
+          </select>
+        </label>
+        <label class="lbl-row" style="flex-direction:column;align-items:stretch;gap:4px">
+          <span>Typ</span>
+          <select id="aeType" style="padding:8px;border-radius:6px;background:var(--panel-2);color:var(--ink);border:1px solid var(--panel-3)"></select>
+        </label>
+      </div>
+      <label class="lbl-row" style="flex-direction:column;align-items:stretch;gap:4px;margin-top:10px">
+        <span>Name *</span>
+        <input type="text" id="aeName" placeholder="z.B. Putin-Militärparade Moskau" style="padding:8px 10px;border-radius:6px;background:var(--panel-2);color:var(--ink);border:1px solid var(--panel-3)" />
+      </label>
+      <label class="lbl-row" style="flex-direction:column;align-items:stretch;gap:4px;margin-top:10px">
+        <span>Beschreibung</span>
+        <textarea id="aeDesc" rows="3" placeholder="Was passiert hier, Hintergrund, Akteure …" style="padding:8px 10px;border-radius:6px;background:var(--panel-2);color:var(--ink);border:1px solid var(--panel-3);resize:vertical;font-family:inherit"></textarea>
+      </label>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
+        <label class="lbl-row" style="flex-direction:column;align-items:stretch;gap:4px">
+          <span>Land (ISO2)</span>
+          <input type="text" id="aeCountry" placeholder="z.B. DE" maxlength="2" style="padding:8px 10px;border-radius:6px;background:var(--panel-2);color:var(--ink);border:1px solid var(--panel-3);text-transform:uppercase" />
+        </label>
+        <label class="lbl-row" style="flex-direction:column;align-items:stretch;gap:4px">
+          <span>Datum von</span>
+          <input type="date" id="aeDateFrom" style="padding:8px;border-radius:6px;background:var(--panel-2);color:var(--ink);border:1px solid var(--panel-3)" />
+        </label>
+        <label class="lbl-row" style="flex-direction:column;align-items:stretch;gap:4px">
+          <span>Datum bis</span>
+          <input type="date" id="aeDateTo" style="padding:8px;border-radius:6px;background:var(--panel-2);color:var(--ink);border:1px solid var(--panel-3)" />
+        </label>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+        <label class="lbl-row" style="flex-direction:column;align-items:stretch;gap:4px">
+          <span>Lat / Lng</span>
+          <div style="display:flex;gap:6px">
+            <input type="number" id="aeLat" step="0.0001" placeholder="Lat" style="padding:8px;border-radius:6px;background:var(--panel-2);color:var(--ink);border:1px solid var(--panel-3);flex:1" />
+            <input type="number" id="aeLng" step="0.0001" placeholder="Lng" style="padding:8px;border-radius:6px;background:var(--panel-2);color:var(--ink);border:1px solid var(--panel-3);flex:1" />
+          </div>
+        </label>
+        <label class="lbl-row" style="flex-direction:column;align-items:stretch;gap:4px">
+          <span>Farbe (optional, sonst Layer-Default)</span>
+          <input type="color" id="aeColor" value="#21c7d6" style="padding:4px;border-radius:6px;background:var(--panel-2);border:1px solid var(--panel-3);height:38px;width:100%" />
+        </label>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:18px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="tb-btn" id="aeCancel">Abbrechen</button>
+        <button class="tb-btn" id="aeSave" style="background:var(--accent);color:#000;border-color:var(--accent)">💾 Speichern</button>
       </div>
     </div>
   </div>

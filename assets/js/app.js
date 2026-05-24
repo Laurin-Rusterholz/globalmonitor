@@ -288,7 +288,7 @@ function syncUrl() {
    PANEL-MANAGER (Mutual Exclusion)
    ════════════════════════════════════════════════════════════════ */
 const SIDE_PANELS = ['ai', 'osint', 'briefing', 'comparePanel', 'pinPanel', 'researchPanel', 'projectPanel'];
-const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal', 'newProjectModal', 'projectNoteModal', 'orgBrowserModal', 'orgProfileModal', 'materialModal', 'focusModal', 'apiKeyModal'];
+const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal', 'newProjectModal', 'projectNoteModal', 'orgBrowserModal', 'orgProfileModal', 'materialModal', 'focusModal', 'apiKeyModal', 'addElementModal'];
 
 function openSidePanel(id) {
   SIDE_PANELS.forEach(p => {
@@ -3093,6 +3093,9 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(item => {
         break;
       case 'pin':
         openPinAddModal({ lat, lng });
+        break;
+      case 'addElement':
+        openAddElementModal({ lat, lng });
         break;
       case 'measure':
         // Mess-Modus starten und den Startpunkt direkt setzen
@@ -7339,3 +7342,232 @@ if (CONFIG.USE_BACKEND) {
   setTimeout(loadOsint, 1500);
   setInterval(loadOsint, 20 * 60 * 1000);
 }
+
+/* ════════════════════════════════════════════════════════════════
+   USER-ELEMENTE: manuell hinzugefügte Elemente (Basen, AKW, Rohstoffe,
+   Ereignisse, etc.) - integriert in die existierenden Layer-Gruppen.
+   Persistiert in localStorage 'gm_user_elements'.
+   ════════════════════════════════════════════════════════════════ */
+
+// Typ-Liste pro Kategorie: {value, label, layer}
+// layer = Schlüssel aus LAYERS (für Symbol, Farbe, Gruppen-Zuordnung)
+const AE_TYPES = {
+  events: [
+    { value:'conflict', label:'Bewaffneter Konflikt', layer:'conflict' },
+    { value:'battle',   label:'Gefecht / Offensive',   layer:'battle' },
+    { value:'protest',  label:'Protest / Unruhe',      layer:'protest' },
+    { value:'action',   label:'Militäraktion',         layer:'action' },
+  ],
+  energy: [
+    { value:'nuclear', label:'Atomkraftwerk',  layer:'nuclear' },
+    { value:'resOil',  label:'Ölfeld',         layer:'resOil' },
+    { value:'resGas',  label:'Gasfeld',        layer:'resGas' },
+  ],
+  resources: [
+    { value:'resLi',  label:'Lithium-Vorkommen', layer:'resLi' },
+    { value:'resRee', label:'Seltene Erden',     layer:'resRee' },
+    { value:'resCu',  label:'Kupfer / Kobalt',   layer:'resCu' },
+    { value:'resU',   label:'Uran',              layer:'resU' },
+    { value:'resFe',  label:'Eisenerz',          layer:'resFe' },
+  ],
+  maritime: [
+    { value:'ports', label:'Strategischer Hafen', layer:'ports' },
+    { value:'choke', label:'Chokepoint',          layer:'choke' },
+  ],
+  military: [
+    { value:'bases',       label:'Militärbasis',       layer:'bases' },
+    { value:'navalBases',  label:'Militärhafen',       layer:'navalBases' },
+    { value:'airBases',    label:'Luftwaffenstützpunkt', layer:'airBases' },
+    { value:'exercises',   label:'Militärübung',       layer:'exercises' },
+    { value:'launchSites', label:'Raketen-/Startplatz', layer:'launchSites' },
+  ],
+  politics: [
+    { value:'sanctions', label:'Sanktioniertes Gebiet', layer:'sanctions' },
+    { value:'bri',       label:'BRI-Projekt',           layer:'bri' },
+  ],
+};
+
+const AE_STORE_KEY = 'gm_user_elements';
+let userElementsCache = [];
+let userElementMarkers = new Map(); // id → marker
+
+function loadUserElements() {
+  try { userElementsCache = JSON.parse(localStorage.getItem(AE_STORE_KEY) || '[]'); }
+  catch { userElementsCache = []; }
+  return userElementsCache;
+}
+function saveUserElements() {
+  try { localStorage.setItem(AE_STORE_KEY, JSON.stringify(userElementsCache)); } catch {}
+}
+
+// Beim App-Start: alle gespeicherten User-Elemente auf der Karte platzieren
+function renderAllUserElements() {
+  loadUserElements();
+  userElementMarkers.forEach(m => { try { map.removeLayer(m); } catch {} });
+  userElementMarkers.clear();
+  userElementsCache.forEach(placeUserElement);
+}
+
+function placeUserElement(el) {
+  if (!el || typeof el.la !== 'number' || typeof el.lo !== 'number') return;
+  const layerKey = el.layer || 'action';
+  const lg = LAYERS[layerKey];
+  if (!lg) return;
+  const sym = LAYER_SYMBOLS[layerKey] || '📍';
+  const color = el.color || lg.c;
+  const dateInfo = el.dateFrom || el.dateTo
+    ? `<span class="row"><span>Zeitraum:</span><b>${el.dateFrom||'?'} – ${el.dateTo||'offen'}</b></span>`
+    : '';
+  const popupHtml = popup(
+    `${sym} ${el.n}`,
+    `${el.d || ''}${dateInfo}${el.country ? `<span class="row"><span>Land:</span><b>${el.country}</b></span>` : ''}
+     <div class="popup-actions">
+       <button onclick="window.openWebsearch('${String(el.n).replace(/'/g,"\\'")}','news','${String(WEBSEARCH_TOPIC_MAP[lg.n] || lg.n).replace(/'/g,"\\'")}')">🌐 Web</button>
+       <button onclick="window.askAboutRegion(${el.la},${el.lo},'${String(el.n).replace(/'/g,"\\'")}')">📋 Region</button>
+       <button onclick="window.editUserElement('${el.id}')">✏ Bearbeiten</button>
+       <button onclick="window.deleteUserElement('${el.id}')" style="background:rgba(255,69,58,0.15);border-color:rgba(255,69,58,0.4)">🗑 Löschen</button>
+     </div>`,
+    color, lg.n, el.la, el.lo, layerKey
+  );
+  const marker = iconMarker([el.la, el.lo], layerKey, { symbol: sym, color, size: 24 });
+  marker.bindPopup(popupHtml);
+  marker.addTo(lg.group);
+  userElementMarkers.set(el.id, marker);
+}
+
+window.deleteUserElement = function(id) {
+  if (!confirm('Dieses Element löschen?')) return;
+  const m = userElementMarkers.get(id);
+  if (m) try { map.removeLayer(m); } catch {}
+  userElementMarkers.delete(id);
+  userElementsCache = userElementsCache.filter(e => e.id !== id);
+  saveUserElements();
+  map.closePopup();
+  toast('Element gelöscht');
+};
+
+window.editUserElement = function(id) {
+  const el = userElementsCache.find(e => e.id === id);
+  if (!el) return;
+  openAddElementModal({ lat: el.la, lng: el.lo, editId: id });
+};
+
+// Typ-Dropdown abhängig von Kategorie befüllen
+function populateAeTypeDropdown(category) {
+  const typeSel = document.getElementById('aeType');
+  if (!typeSel) return;
+  const list = AE_TYPES[category] || [];
+  typeSel.innerHTML = list.map(t => `<option value="${t.value}" data-layer="${t.layer}">${t.label}</option>`).join('');
+}
+
+async function openAddElementModal({ lat, lng, editId = null }) {
+  const modal = document.getElementById('addElementModal');
+  if (!modal) return;
+  // Initial: Kategorie 'events' + Typen befüllen
+  const catSel = document.getElementById('aeCategory');
+  catSel.value = 'events';
+  populateAeTypeDropdown('events');
+
+  let prefill = null;
+  if (editId) {
+    prefill = userElementsCache.find(e => e.id === editId);
+    if (!prefill) { toast('Element nicht gefunden'); return; }
+    // Kategorie aus layer rückrechnen
+    for (const [cat, list] of Object.entries(AE_TYPES)) {
+      if (list.some(t => t.layer === prefill.layer)) {
+        catSel.value = cat;
+        populateAeTypeDropdown(cat);
+        break;
+      }
+    }
+  }
+
+  // Felder befüllen
+  const typeSel = document.getElementById('aeType');
+  if (prefill) {
+    const opt = [...typeSel.options].find(o => o.dataset.layer === prefill.layer);
+    if (opt) typeSel.value = opt.value;
+  }
+  document.getElementById('aeName').value = prefill?.n || '';
+  document.getElementById('aeDesc').value = prefill?.d || '';
+  document.getElementById('aeCountry').value = prefill?.country || '';
+  document.getElementById('aeDateFrom').value = prefill?.dateFrom || '';
+  document.getElementById('aeDateTo').value = prefill?.dateTo || '';
+  document.getElementById('aeLat').value = prefill?.la ?? (lat || '');
+  document.getElementById('aeLng').value = prefill?.lo ?? (lng || '');
+  document.getElementById('aeColor').value = prefill?.color || '#21c7d6';
+  modal.dataset.editId = editId || '';
+
+  // Bei neuem Element: Reverse-Geocode für Land (best effort)
+  if (!editId && lat && lng && !document.getElementById('aeCountry').value) {
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=5&accept-language=de`)
+      .then(r => r.json()).then(d => {
+        const cc = d.address?.country_code?.toUpperCase();
+        if (cc) document.getElementById('aeCountry').value = cc;
+      }).catch(()=>{});
+  }
+  openModal('addElementModal');
+  setTimeout(() => document.getElementById('aeName').focus(), 60);
+}
+
+document.getElementById('aeCategory')?.addEventListener('change', (e) => populateAeTypeDropdown(e.target.value));
+document.getElementById('aeCancel')?.addEventListener('click', () => document.getElementById('addElementModal').classList.remove('open'));
+document.getElementById('addElementBtn')?.addEventListener('click', () => {
+  // Toolbar-Button: nutze Map-Zentrum als Default-Position
+  const c = map.getCenter();
+  openAddElementModal({ lat: c.lat, lng: c.lng });
+});
+
+document.getElementById('aeSave')?.addEventListener('click', () => {
+  const modal = document.getElementById('addElementModal');
+  const editId = modal.dataset.editId || null;
+  const name = document.getElementById('aeName').value.trim();
+  if (!name) return toast('Name ist Pflicht');
+  const lat = parseFloat(document.getElementById('aeLat').value);
+  const lng = parseFloat(document.getElementById('aeLng').value);
+  if (isNaN(lat) || isNaN(lng)) return toast('Koordinaten ungültig');
+  const typeSel = document.getElementById('aeType');
+  const layerKey = typeSel.options[typeSel.selectedIndex]?.dataset.layer || 'action';
+
+  const el = {
+    id: editId || `ue_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+    n: name,
+    d: document.getElementById('aeDesc').value.trim(),
+    layer: layerKey,
+    type: typeSel.value,
+    country: document.getElementById('aeCountry').value.trim().toUpperCase() || '',
+    la: lat, lo: lng,
+    dateFrom: document.getElementById('aeDateFrom').value || '',
+    dateTo: document.getElementById('aeDateTo').value || '',
+    color: document.getElementById('aeColor').value || '',
+    created: editId ? (userElementsCache.find(e => e.id === editId)?.created || new Date().toISOString()) : new Date().toISOString(),
+    updated: new Date().toISOString(),
+    userCreated: true,
+  };
+
+  if (editId) {
+    // Bestehenden Marker entfernen
+    const oldMarker = userElementMarkers.get(editId);
+    if (oldMarker) try { map.removeLayer(oldMarker); } catch {}
+    userElementMarkers.delete(editId);
+    userElementsCache = userElementsCache.map(e => e.id === editId ? el : e);
+  } else {
+    userElementsCache.push(el);
+  }
+  saveUserElements();
+  placeUserElement(el);
+  // Layer sichtbar machen falls nicht
+  const lg = LAYERS[layerKey];
+  if (lg && !map.hasLayer(lg.group)) {
+    map.addLayer(lg.group);
+    lg.on = true;
+    const cb = document.querySelector(`input[data-layer="${layerKey}"]`);
+    if (cb) cb.checked = true;
+  }
+  document.getElementById('addElementModal').classList.remove('open');
+  map.flyTo([lat, lng], Math.max(map.getZoom(), 6), { duration: 0.6 });
+  toast(`✅ '${name}' ${editId ? 'aktualisiert' : 'hinzugefügt'}`);
+});
+
+// Beim App-Start: bestehende User-Elemente platzieren (nach R-Load damit Layers existieren)
+setTimeout(renderAllUserElements, 800);
