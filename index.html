@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.123.0/Build/Cesium/Widgets/widgets.css" />
 <link rel="stylesheet" href="assets/css/app.css" />
 </head>
 <body>
@@ -60,6 +61,7 @@
       <button class="tb-btn" id="sourcesBtn" title="Datenquellen">ℹ<span class="tb-label">Quellen</span></button>
       <button class="tb-btn" id="researchBtn" title="Recherche-Archiv">🗃<span class="tb-label">Recherche</span></button>
       <button class="tb-btn" id="orgsBtn" title="Internationale Organisationen">🏛<span class="tb-label">Orgs</span></button>
+      <button class="tb-btn" id="threeDBtn" title="3D-Globe (Cesium) - mit Tastatur/Maus navigieren">🌍<span class="tb-label">3D</span></button>
       <button class="tb-btn" id="apiKeyBtn" title="Anthropic API-Key (direkter Browser-Zugriff, kein Netlify-Limit)">🔑<span class="tb-label">API-Key</span></button>
       <button class="tb-btn" id="newProjectBtn" title="Neues Recherche-Projekt" style="background:var(--accent);color:#000;border-color:var(--accent)">＋<span class="tb-label">Projekt</span></button>
       <select class="tb-btn" id="timeWindow" title="Zeitfenster für Konflikt-Live-Daten">
@@ -120,6 +122,18 @@
       <div class="ctx-item" data-act="share">🔗 Link zu dieser Stelle</div>
     </div>
     <div id="map"></div>
+    <!-- 3D-Globus (Cesium) - overlay, wird via 'open' Klasse sichtbar -->
+    <div id="cesiumWrap">
+      <div id="cesiumContainer"></div>
+      <div id="cesiumTopbar">
+        <button class="tb-btn" id="cesium2DBtn" title="Zurück zur 2D-Karte">← 2D</button>
+        <button class="tb-btn" id="cesiumHomeBtn" title="Globalansicht">🏠 Übersicht</button>
+        <button class="tb-btn" id="cesiumGoogleBtn" title="In Google Earth öffnen (neuer Tab)">🌍 In Google Earth</button>
+        <span class="cesium-help">
+          🖱 Linke Maus = drehen · Rechte Maus = zoomen · Mittlere/Scroll = tilt · <b>Tasten:</b> W A S D = bewegen, Q E = drehen, R F = tilt, +/- = zoom
+        </span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -627,6 +641,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cesium@1.123.0/Build/Cesium/Cesium.js"></script>
 <script src="https://unpkg.com/leaflet-side-by-side@2.2.0/leaflet-side-by-side.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>

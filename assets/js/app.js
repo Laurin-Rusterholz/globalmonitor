@@ -6643,10 +6643,11 @@ function showDrawToolbar() {
         <button class="ptb-btn" data-dm="rect">▢ Rechteck</button>
         <button class="ptb-btn" data-dm="circle">○ Kreis</button>
         <button class="ptb-btn" data-dm="freehand">✏ Freihand</button>
+        <button class="ptb-btn" data-dm="erase" style="background:rgba(255,69,58,0.15);border-color:rgba(255,69,58,0.5)">🧽 Radieren</button>
       </div>
       <div class="draw-colors">${colorBtns}</div>
       <span style="font-size:10px;color:var(--ink-dim);align-self:center;padding:0 8px;flex:1;min-width:0">
-        Linksklick = Punkt setzen · Rechtsklick = einzelner Punkt · Doppelklick = beendet · Freihand: Maus gedrückt halten
+        Linksklick = Punkt setzen · Doppelklick = beendet · Freihand: gedrückt halten · 🧽 Radieren: einzelne Elemente entfernen
       </span>
       <button class="ptb-btn" id="drawDone" style="background:var(--accent);color:#000">✓ Fertig</button>
     `;
@@ -6682,8 +6683,58 @@ function setDrawMode(mode) {
   document.querySelectorAll('#drawSubToolbar button[data-dm]').forEach(b => {
     b.classList.toggle('active', b.dataset.dm === mode);
   });
-  map._container.style.cursor = 'crosshair';
-  toast(`Modus: ${mode}. Klick auf Karte`);
+  if (mode === 'erase') {
+    map._container.style.cursor = 'not-allowed';
+    enableEraseMode();
+    toast('🧽 Radieren-Modus: klicke ein Element zum Löschen');
+  } else {
+    map._container.style.cursor = 'crosshair';
+    disableEraseMode();
+    toast(`Modus: ${mode}. Klick auf Karte`);
+  }
+}
+
+// Erase-Modus: klick auf Drawing-Layer → genau dieses Element löschen.
+// Layer bekommen temporären Klick-Handler + Hover-Highlight.
+let eraseHandlers = [];
+function enableEraseMode() {
+  disableEraseMode(); // alte Handler räumen
+  drawnItems.eachLayer(layer => {
+    const origStyle = layer.options && (layer.options.weight !== undefined)
+      ? { weight: layer.options.weight, opacity: layer.options.opacity, color: layer.options.color }
+      : null;
+    const onMouseOver = () => {
+      try {
+        if (layer.setStyle) layer.setStyle({ weight: 6, color: '#ff453a', opacity: 1, fillOpacity: 0.5, fillColor: '#ff453a' });
+      } catch {}
+    };
+    const onMouseOut = () => {
+      try {
+        if (layer.setStyle && origStyle) layer.setStyle(origStyle);
+        else if (layer.feature?.properties?.color && layer.setStyle) {
+          layer.setStyle({ color: layer.feature.properties.color, weight: 3, opacity: 1, fillOpacity: 0.3 });
+        }
+      } catch {}
+    };
+    const onClick = (e) => {
+      L.DomEvent.stopPropagation(e);
+      drawnItems.removeLayer(layer);
+      saveDrawings();
+      toast('🧽 Element gelöscht');
+    };
+    layer.on('mouseover', onMouseOver);
+    layer.on('mouseout', onMouseOut);
+    layer.on('click', onClick);
+    eraseHandlers.push({ layer, onMouseOver, onMouseOut, onClick });
+  });
+}
+function disableEraseMode() {
+  eraseHandlers.forEach(h => {
+    h.layer.off('mouseover', h.onMouseOver);
+    h.layer.off('mouseout', h.onMouseOut);
+    h.layer.off('click', h.onClick);
+  });
+  eraseHandlers = [];
 }
 
 function toggleDrawing() {
@@ -6721,6 +6772,8 @@ function toggleDrawing() {
   } else {
     finishDrawing();
     hideDrawToolbar();
+    disableEraseMode();
+    drawMode = null;
     map._container.style.cursor = '';
     map.off('click', drawClickHandler);
     map.off('contextmenu', drawRightClickHandler);
@@ -6791,6 +6844,7 @@ function drawClickHandler(e) {
   if (!drawMode) return;
   if (measureActive || pinMode) return;
   if (drawMode === 'freehand') return; // Freihand nutzt mousedown
+  if (drawMode === 'erase') return;    // Erase nutzt per-Layer-Handler
   L.DomEvent.stopPropagation(e);
   const ll = e.latlng;
 
@@ -6885,6 +6939,177 @@ document.getElementById('ptbClear')?.addEventListener('click', () => {
   if (!confirm('Alle Zeichnungen löschen?')) return;
   drawnItems.clearLayers();
   saveDrawings();
+});
+
+/* ════════════════════════════════════════════════════════════════
+   3D-GLOBUS (Cesium) - mit Tastatur/Maus-Navigation
+   ════════════════════════════════════════════════════════════════ */
+let cesiumViewer = null;
+let threeDActive = false;
+
+function init3DViewer() {
+  if (cesiumViewer) return cesiumViewer;
+  if (typeof Cesium === 'undefined') {
+    toast('Cesium nicht geladen - Internet-Verbindung prüfen');
+    return null;
+  }
+  // Ion-Token leer = kein Cesium-Cloud-Zugriff, nur freie OSM-Tiles
+  Cesium.Ion.defaultAccessToken = '';
+  try {
+    cesiumViewer = new Cesium.Viewer('cesiumContainer', {
+      terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+      animation: false, timeline: false, geocoder: false,
+      homeButton: false, sceneModePicker: true, baseLayerPicker: false,
+      navigationHelpButton: false, fullscreenButton: true, infoBox: true,
+      selectionIndicator: true, shouldAnimate: true,
+    });
+    // Default-Imagery durch OSM ersetzen (kein Token nötig)
+    cesiumViewer.imageryLayers.removeAll();
+    cesiumViewer.imageryLayers.addImageryProvider(new Cesium.OpenStreetMapImageryProvider({
+      url: 'https://tile.openstreetmap.org/',
+      credit: '© OpenStreetMap contributors',
+      maximumLevel: 18
+    }));
+    cesiumViewer.scene.globe.enableLighting = false;
+    cesiumViewer.scene.skyAtmosphere.show = true;
+    // Verstecke Cesium-Logo/Credits-Overlay (nervig)
+    try {
+      cesiumViewer._cesiumWidget._creditContainer.style.display = 'none';
+    } catch {}
+    setup3DKeyboard();
+    populate3DEntities();
+  } catch (e) {
+    console.error('Cesium init fail:', e);
+    toast('3D-Init fehlgeschlagen: ' + e.message);
+    cesiumViewer = null;
+  }
+  return cesiumViewer;
+}
+
+function setup3DKeyboard() {
+  if (!cesiumViewer) return;
+  const camera = cesiumViewer.camera;
+  const handler = (e) => {
+    if (!threeDActive) return;
+    if (document.activeElement && /input|textarea/i.test(document.activeElement.tagName)) return;
+    const moveDistance = camera.positionCartographic.height * 0.05;
+    const rotateAmount = Cesium.Math.toRadians(3);
+    switch (e.key.toLowerCase()) {
+      case 'w': camera.moveForward(moveDistance); break;
+      case 's': camera.moveBackward(moveDistance); break;
+      case 'a': camera.moveLeft(moveDistance); break;
+      case 'd': camera.moveRight(moveDistance); break;
+      case 'q': camera.rotateLeft(rotateAmount); break;
+      case 'e': camera.rotateRight(rotateAmount); break;
+      case 'r': camera.rotateUp(rotateAmount); break;
+      case 'f': camera.rotateDown(rotateAmount); break;
+      case '+': case '=': camera.zoomIn(moveDistance * 2); break;
+      case '-': case '_': camera.zoomOut(moveDistance * 2); break;
+      default: return;
+    }
+    e.preventDefault();
+  };
+  document.addEventListener('keydown', handler);
+}
+
+// Markante 2D-Daten (Länder-Highlights, Konflikte, Basen) ins 3D-View übertragen.
+function populate3DEntities() {
+  if (!cesiumViewer || !window.R) return;
+  const ds = cesiumViewer.entities;
+  ds.removeAll();
+  // Atomkraftwerke
+  (R.nuclear || []).forEach(n => {
+    ds.add({
+      position: Cesium.Cartesian3.fromDegrees(n.lo, n.la),
+      point: { pixelSize: 8, color: Cesium.Color.YELLOW, outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
+      label: { text: '☢', font: '16px sans-serif', verticalOrigin: Cesium.VerticalOrigin.CENTER, pixelOffset: new Cesium.Cartesian2(0, -14), heightReference: Cesium.HeightReference.NONE },
+      name: n.n, description: `${n.d}<br><b>Reaktoren:</b> ${n.reactors}<br><b>Land:</b> ${n.country}`
+    });
+  });
+  // Häfen
+  (R.ports || []).forEach(p => {
+    ds.add({
+      position: Cesium.Cartesian3.fromDegrees(p.lo, p.la),
+      point: { pixelSize: 7, color: Cesium.Color.fromCssColorString('#5b9bff'), outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
+      label: { text: '⚓', font: '14px sans-serif', verticalOrigin: Cesium.VerticalOrigin.CENTER, pixelOffset: new Cesium.Cartesian2(0, -12) },
+      name: p.n, description: `${p.d}<br><b>Land:</b> ${p.country}`
+    });
+  });
+  // Militärbasen
+  (R.militaryBases || []).forEach(b => {
+    const sym = b.type === 'naval' ? '⚓' : b.type === 'air' ? '✈' : '🛡';
+    const col = b.type === 'air' ? '#ff7847' : '#ff5da2';
+    ds.add({
+      position: Cesium.Cartesian3.fromDegrees(b.lo, b.la),
+      point: { pixelSize: 7, color: Cesium.Color.fromCssColorString(col), outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
+      label: { text: sym, font: '14px sans-serif', verticalOrigin: Cesium.VerticalOrigin.CENTER, pixelOffset: new Cesium.Cartesian2(0, -12) },
+      name: b.n, description: `${b.d}<br><b>Land:</b> ${b.country}`
+    });
+  });
+  // Konflikte (Live-Events)
+  (typeof conflictStore !== 'undefined' ? conflictStore : []).slice(0, 200).forEach(e => {
+    const col = e.c === 'protest' ? '#ffc83d' : '#ff4d3d';
+    ds.add({
+      position: Cesium.Cartesian3.fromDegrees(e.lo, e.la),
+      point: { pixelSize: 9, color: Cesium.Color.fromCssColorString(col).withAlpha(0.7), outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
+      name: e.n, description: e.i || ''
+    });
+  });
+}
+
+function flyTo3D(latLng) {
+  if (!cesiumViewer) return;
+  cesiumViewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(latLng.lng, latLng.lat, 2000000),
+    duration: 1.5,
+  });
+}
+
+function toggle3D() {
+  threeDActive = !threeDActive;
+  const wrap = document.getElementById('cesiumWrap');
+  const btn = document.getElementById('threeDBtn');
+  if (threeDActive) {
+    wrap.classList.add('open');
+    btn.classList.add('active');
+    if (!cesiumViewer) {
+      init3DViewer();
+      if (cesiumViewer) {
+        // Initial zur aktuellen 2D-Map-Position
+        const c = map.getCenter();
+        flyTo3D({ lat: c.lat, lng: c.lng });
+      }
+    } else {
+      // Bei wiederholtem Öffnen: Entities aktualisieren + zur Map-Position
+      populate3DEntities();
+      const c = map.getCenter();
+      flyTo3D({ lat: c.lat, lng: c.lng });
+    }
+  } else {
+    wrap.classList.remove('open');
+    btn.classList.remove('active');
+  }
+}
+
+document.getElementById('threeDBtn')?.addEventListener('click', toggle3D);
+document.getElementById('cesium2DBtn')?.addEventListener('click', toggle3D);
+document.getElementById('cesiumHomeBtn')?.addEventListener('click', () => {
+  if (!cesiumViewer) return;
+  cesiumViewer.camera.flyHome(1.2);
+});
+document.getElementById('cesiumGoogleBtn')?.addEventListener('click', () => {
+  if (!cesiumViewer) {
+    const c = map.getCenter();
+    window.open(`https://earth.google.com/web/@${c.lat},${c.lng},0a,1000000d,35y,0h,0t,0r`, '_blank', 'noopener');
+    return;
+  }
+  // Aktuelle Cesium-Position für Google Earth Deep-Link
+  const cam = cesiumViewer.camera;
+  const carto = Cesium.Cartographic.fromCartesian(cam.position);
+  const lat = Cesium.Math.toDegrees(carto.latitude);
+  const lng = Cesium.Math.toDegrees(carto.longitude);
+  const height = carto.height;
+  window.open(`https://earth.google.com/web/@${lat},${lng},0a,${Math.round(height)}d,35y,0h,0t,0r`, '_blank', 'noopener');
 });
 
 /* ════════════════════════════════════════════════════════════════
