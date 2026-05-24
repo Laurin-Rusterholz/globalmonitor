@@ -153,8 +153,53 @@ async function callAi({ system, messages, webSearch = false, maxTokens = 1500, m
 if (USE_DIRECT_ANTHROPIC) {
   console.info('%c✅ Direct-Anthropic aktiv (Browser→Anthropic, kein 26s-Limit)', 'color:#30d158;font-weight:600');
 } else {
-  console.info('%c⚠ Direct-Anthropic OFF. Aktivieren:\n  localStorage.setItem("gm_anthropic_key","sk-ant-api03-…");\n  location.reload();', 'color:#ff9f0a');
+  console.info('%c⚠ Direct-Anthropic OFF. Toolbar → 🔑 API-Key zum Aktivieren', 'color:#ff9f0a');
 }
+
+// API-Key Modal: Speichern / Entfernen / Status anzeigen
+function openApiKeyModal() {
+  const modal = document.getElementById('apiKeyModal');
+  if (!modal) return;
+  const input = document.getElementById('apiKeyInput');
+  const status = document.getElementById('apiKeyStatus');
+  const currentKey = localStorage.getItem('gm_anthropic_key') || '';
+  input.value = currentKey;
+  if (USE_DIRECT_ANTHROPIC) {
+    status.style.background = 'rgba(48,209,88,0.15)';
+    status.style.border = '1px solid rgba(48,209,88,0.4)';
+    status.style.color = '#30d158';
+    status.innerHTML = `✅ <b>Aktiv</b> · Key: <code style="color:var(--ink-dim);font-family:monospace">${currentKey.slice(0,18)}…${currentKey.slice(-6)}</code>`;
+  } else {
+    status.style.background = 'rgba(255,159,10,0.15)';
+    status.style.border = '1px solid rgba(255,159,10,0.4)';
+    status.style.color = '#ff9f0a';
+    status.innerHTML = `⚠ <b>Nicht aktiv</b> — KI-Anfragen laufen über Netlify (26s-Limit, evtl. 504 bei langen Generierungen). Key eingeben + Speichern.`;
+  }
+  openModal('apiKeyModal');
+  setTimeout(() => input.focus(), 50);
+}
+document.getElementById('apiKeyBtn')?.addEventListener('click', openApiKeyModal);
+document.getElementById('apiKeyShow')?.addEventListener('change', (e) => {
+  const input = document.getElementById('apiKeyInput');
+  input.type = e.target.checked ? 'text' : 'password';
+});
+document.getElementById('apiKeySave')?.addEventListener('click', () => {
+  const input = document.getElementById('apiKeyInput');
+  const key = (input.value || '').trim();
+  if (!key) { toast('Key ist leer'); return; }
+  if (!key.startsWith('sk-ant-')) {
+    if (!confirm(`Key beginnt nicht mit "sk-ant-" - trotzdem speichern?`)) return;
+  }
+  localStorage.setItem('gm_anthropic_key', key);
+  toast('💾 Key gespeichert, lade neu…');
+  setTimeout(() => location.reload(), 600);
+});
+document.getElementById('apiKeyRemove')?.addEventListener('click', () => {
+  if (!confirm('API-Key wirklich entfernen? KI-Anfragen gehen dann wieder über Netlify (26s-Limit).')) return;
+  localStorage.removeItem('gm_anthropic_key');
+  toast('🗑 Key entfernt, lade neu…');
+  setTimeout(() => location.reload(), 600);
+});
 
 /* ════ STATE PERSISTENCE (localStorage + URL hash) ════ */
 const STATE_KEY = 'gm_state_v1';
@@ -200,7 +245,7 @@ function syncUrl() {
    PANEL-MANAGER (Mutual Exclusion)
    ════════════════════════════════════════════════════════════════ */
 const SIDE_PANELS = ['ai', 'osint', 'briefing', 'comparePanel', 'pinPanel', 'researchPanel', 'projectPanel'];
-const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal', 'newProjectModal', 'projectNoteModal', 'orgBrowserModal', 'orgProfileModal', 'materialModal', 'focusModal'];
+const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal', 'newProjectModal', 'projectNoteModal', 'orgBrowserModal', 'orgProfileModal', 'materialModal', 'focusModal', 'apiKeyModal'];
 
 function openSidePanel(id) {
   SIDE_PANELS.forEach(p => {

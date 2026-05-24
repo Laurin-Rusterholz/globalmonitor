@@ -60,6 +60,7 @@
       <button class="tb-btn" id="sourcesBtn" title="Datenquellen">ℹ<span class="tb-label">Quellen</span></button>
       <button class="tb-btn" id="researchBtn" title="Recherche-Archiv">🗃<span class="tb-label">Recherche</span></button>
       <button class="tb-btn" id="orgsBtn" title="Internationale Organisationen">🏛<span class="tb-label">Orgs</span></button>
+      <button class="tb-btn" id="apiKeyBtn" title="Anthropic API-Key (direkter Browser-Zugriff, kein Netlify-Limit)">🔑<span class="tb-label">API-Key</span></button>
       <button class="tb-btn" id="newProjectBtn" title="Neues Recherche-Projekt" style="background:var(--accent);color:#000;border-color:var(--accent)">＋<span class="tb-label">Projekt</span></button>
       <select class="tb-btn" id="timeWindow" title="Zeitfenster für Konflikt-Live-Daten">
         <option value="1d">24h</option>
@@ -152,6 +153,45 @@
       </label>
       <div class="lbl-row" id="notifyStatus" style="color:var(--ink-dim);font-size:11px"></div>
       <button class="tb-btn" id="notifyTest">Test-Notification senden</button>
+    </div>
+  </div>
+</div>
+
+<!-- API-Key Modal: erlaubt Anthropic-Key direkt im Browser zu speichern -->
+<div id="apiKeyModal" class="modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2>🔑 Anthropic API-Key</h2>
+      <button class="closeBtn" data-close="apiKeyModal">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-info" style="line-height:1.5">
+        Mit hinterlegtem API-Key gehen alle KI-Anfragen <b>direkt vom Browser zu Anthropic</b> —
+        kein Netlify 26s-Timeout, Sonnet 4.6 kann minutenlang generieren (Voll-Dossier,
+        Tiefenanalyse mit Web-Suche, etc.).<br><br>
+        <b style="color:var(--protest)">Risiko:</b> Der Key liegt in localStorage dieses Browsers.
+        Wer Zugriff auf den Browser hat, kann ihn auslesen. Nutze einen separaten Key mit
+        Limit (Anthropic Console → Settings → Limits) und rotiere bei Verdacht.
+      </p>
+      <div id="apiKeyStatus" style="margin:12px 0;padding:8px 12px;border-radius:6px;font-size:12px"></div>
+      <label class="lbl-row" style="flex-direction:column;align-items:stretch;gap:6px">
+        <span>Anthropic API-Key (beginnt mit <code>sk-ant-api03-…</code>):</span>
+        <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-…" autocomplete="off"
+               style="padding:9px 11px;border-radius:6px;border:1px solid var(--panel-3);background:var(--panel-2);color:var(--ink);font-family:monospace;font-size:12px">
+      </label>
+      <label class="lbl-row" style="gap:6px;margin-top:8px">
+        <input type="checkbox" id="apiKeyShow"> Key anzeigen
+      </label>
+      <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+        <button class="tb-btn" id="apiKeySave" style="background:var(--accent);color:#000;border-color:var(--accent)">💾 Speichern + Reload</button>
+        <button class="tb-btn" id="apiKeyRemove" style="background:rgba(255,69,58,0.15);border-color:rgba(255,69,58,0.4)">🗑 Entfernen + Reload</button>
+        <a class="tb-btn" href="https://console.anthropic.com/settings/keys" target="_blank" style="text-decoration:none">↗ Neuen Key erstellen</a>
+      </div>
+      <div style="margin-top:14px;padding:10px;background:var(--panel-2);border-radius:6px;font-size:11px;color:var(--ink-dim);line-height:1.5">
+        <b>Tipp:</b> Auf <a href="https://console.anthropic.com/settings/limits" target="_blank" style="color:var(--accent)">console.anthropic.com/settings/limits</a>
+        kannst du ein Tages-/Monats-Spending-Limit setzen, falls jemand den Key extrahiert.
+        Empfehlung: $5-20/Tag, das reicht für intensive Nutzung dieser App.
+      </div>
     </div>
   </div>
 </div>
