@@ -4272,22 +4272,43 @@ async function refreshCompareDataIfStale() {
 async function openComparePanel() {
   openSidePanel('comparePanel');
   document.getElementById('cmpPanelSub').textContent = `${comparedCountries.length} Länder`;
-  const body = document.getElementById('comparePanelBody');
-  body.innerHTML = `<div style="padding:40px;text-align:center;color:var(--ink-dim)">
+  // WICHTIG: nur in cmpStaticContent schreiben, nicht ins ganze body
+  // (sonst wird cmpAiAnswer-div gelöscht und der AI-Button crasht!)
+  ensureCompareDomStructure();
+  const staticEl = document.getElementById('cmpStaticContent');
+  staticEl.innerHTML = `<div style="padding:40px;text-align:center;color:var(--ink-dim)">
     <div style="font-size:24px;margin-bottom:10px">⏳</div>
     Lade Länderdaten für ${comparedCountries.length} Länder…
   </div>`;
   await refreshCompareDataIfStale();
   renderComparePanel();
-  // Scroll Body nach oben für frische Sicht
-  body.scrollTop = 0;
+  document.getElementById('comparePanelBody').scrollTop = 0;
+}
+
+// Stellt sicher dass die Compare-Struktur intakt ist:
+// #comparePanelBody enthält #cmpStaticContent + #cmpAiAnswer
+function ensureCompareDomStructure() {
+  const body = document.getElementById('comparePanelBody');
+  if (!body) return;
+  if (!document.getElementById('cmpStaticContent')) {
+    const div = document.createElement('div');
+    div.id = 'cmpStaticContent';
+    body.insertBefore(div, body.firstChild);
+  }
+  if (!document.getElementById('cmpAiAnswer')) {
+    const div = document.createElement('div');
+    div.id = 'cmpAiAnswer';
+    div.className = 'cmp-ai-answer';
+    body.appendChild(div);
+  }
 }
 document.getElementById('closeComparePanel')?.addEventListener('click', () => {
   document.getElementById('comparePanel').classList.remove('open');
 });
 
 function renderComparePanel() {
-  const body = document.getElementById('cmpStaticContent') || document.getElementById('comparePanelBody');
+  ensureCompareDomStructure();
+  const body = document.getElementById('cmpStaticContent');
   if (!body) return;
   if (!comparedCountries.length) {
     body.innerHTML = '<div style="padding:40px;text-align:center;color:var(--ink-dim)">Keine Länder im Vergleich</div>';
@@ -4359,12 +4380,32 @@ function renderComparePanel() {
 
 // AI-Beziehungs-Analyse
 async function askAiComparison(predefinedFocus) {
-  if (comparedCountries.length < 2) return;
+  if (comparedCountries.length < 2) {
+    toast('Mindestens 2 Länder im Vergleich nötig');
+    return;
+  }
+  ensureCompareDomStructure(); // sicherstellen dass cmpAiAnswer existiert
   const answer = document.getElementById('cmpAiAnswer');
   const btn = document.getElementById('cmpAskAi');
-  btn.disabled = true; btn.textContent = '… analysiere';
+  if (!answer || !btn) {
+    toast('UI-Element fehlt - bitte Seite neu laden');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '⏳ KI analysiert…';
+  btn.style.background = 'var(--protest)';
   answer.classList.add('show');
-  answer.innerHTML = '<i style="color:var(--ink-dim)">Claude analysiert Beziehungen…</i>';
+  const startedAt = Date.now();
+  const progressId = setInterval(() => {
+    const sec = Math.round((Date.now() - startedAt) / 1000);
+    btn.textContent = `⏳ KI analysiert… ${sec}s`;
+  }, 1000);
+  answer.innerHTML = `
+    <div style="padding:20px;text-align:center;color:var(--accent)">
+      <div style="font-size:32px;margin-bottom:10px">⚡</div>
+      <b>Claude analysiert Beziehungen zwischen ${comparedCountries.map(c=>c.name).join(' × ')}…</b>
+      <div style="font-size:11px;color:var(--ink-dim);margin-top:8px">Sonnet 4.6 · max 4000 Tokens · läuft direkt im Browser</div>
+    </div>`;
 
   const focusMap = {
     relations: 'Beschreibe die diplomatischen Beziehungen zwischen diesen Ländern. Stärken, Spannungen, aktuelle Stand.',
@@ -4425,10 +4466,23 @@ ${countriesText}`;
     // Scroll zu Answer (sichtbar machen)
     setTimeout(() => answer.scrollIntoView({ behavior:'smooth', block:'start' }), 100);
   } catch (e) {
-    answer.innerHTML = '<span style="color:var(--conflict)">Fehler: '+escapeHtml(e.message)+'</span>';
+    answer.innerHTML = `<div style="padding:14px;background:rgba(255,69,58,0.15);border-left:3px solid #ff453a;border-radius:0 6px 6px 0">
+      <b style="color:#ff453a">⚠ KI-Analyse fehlgeschlagen</b><br>
+      <div style="color:var(--ink-dim);font-size:11.5px;margin-top:6px;white-space:pre-wrap">${escapeHtml(e.message || String(e))}</div>
+      <div style="font-size:10.5px;color:var(--ink-faint);margin-top:10px;line-height:1.5">
+        Mögliche Ursachen:<br>
+        • Anthropic-API-Key nicht aktiv (🔑 API-Key prüfen)<br>
+        • Rate-Limit oder kein Guthaben<br>
+        • Netzwerk-Problem<br>
+        • Modell nicht erreichbar
+      </div>
+    </div>`;
     answer.classList.add('show');
   }
-  btn.disabled = false; btn.textContent = '⚡ Beziehungs-Analyse via KI';
+  clearInterval(progressId);
+  btn.disabled = false;
+  btn.style.background = 'var(--accent)';
+  btn.textContent = '⚡ Beziehungs-Analyse via KI';
 }
 document.getElementById('cmpAskAi')?.addEventListener('click', () => askAiComparison());
 document.querySelectorAll('#comparePanel .chip').forEach(c => c.onclick = () => askAiComparison(c.dataset.cq));
