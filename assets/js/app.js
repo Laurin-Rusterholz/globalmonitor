@@ -339,8 +339,10 @@ map.on('moveend zoomend', () => {
   saveState({ view: { center: [map.getCenter().lat, map.getCenter().lng], zoom: map.getZoom() } });
   syncUrl();
 });
-// NASA GIBS - tägliche Satellitenbilder (VIIRS, gestern als Default für sichere Verfügbarkeit)
-function gibsDate(daysBack=1) {
+// NASA GIBS - tägliche Satellitenbilder.
+// Default: HEUTE. Bei Tile-Fehlern (VIIRS publiziert mit 3-12h Lag) automatischer
+// Fallback auf gestern → vorgestern. So sieht der User immer Daten.
+function gibsDate(daysBack=0) {
   const d = new Date(Date.now() - daysBack * 86400000);
   return d.toISOString().slice(0, 10);
 }
@@ -349,8 +351,8 @@ const bases = {
     {attribution:'© OSM, © CARTO', subdomains:'abcd', maxZoom:19}),
   sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     {attribution:'© Esri, Maxar, Earthstar', maxZoom:19}),
-  nasa: buildNasaLayer(gibsDate(1)),
-  nasahd: buildNasaHdLayer(gibsDate(7)),
+  nasa: buildNasaLayer(gibsDate(0)),
+  nasahd: buildNasaHdLayer(gibsDate(3)),
   terrain: L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
     {attribution:'© OSM, © CARTO', subdomains:'abcd', maxZoom:19}),
   topo: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
@@ -359,19 +361,61 @@ const bases = {
 let activeBase = bases.dark.addTo(map);
 let activeBaseKey = 'dark';
 
+// Auto-Fallback bei Tile-Fehlern. NASA GIBS hat 3-12h Lag - heute ist
+// oft erst halb publiziert. Nach 6+ Tile-Errors innerhalb 5s: Datum -1 Tag.
+function attachAutoFallback(layer, kind, date, daysBack) {
+  let errorCount = 0;
+  let firstErrTs = 0;
+  let switched = false;
+  layer.on('tileerror', () => {
+    if (switched) return;
+    const now = Date.now();
+    if (!firstErrTs || now - firstErrTs > 5000) {
+      firstErrTs = now;
+      errorCount = 1;
+    } else {
+      errorCount++;
+    }
+    if (errorCount >= 6 && daysBack < 7) {
+      switched = true;
+      const newDaysBack = daysBack + 1;
+      const newDate = gibsDate(newDaysBack);
+      console.info(`NASA ${kind}: ${date} unvollständig (${errorCount} Tile-Fehler) → fallback auf ${newDate}`);
+      // Aktuell aktive Basemap?
+      if (activeBaseKey === kind) {
+        map.removeLayer(activeBase);
+        const factory = kind === 'nasahd' ? buildNasaHdLayer : buildNasaLayer;
+        bases[kind] = factory(newDate, newDaysBack);
+        activeBase = bases[kind].addTo(map);
+        activeBase.bringToBack && activeBase.bringToBack();
+        const di = document.getElementById('satDate');
+        if (di) di.value = newDate;
+        toast(`NASA ${date} unvollständig - zeige ${newDate}`);
+      } else {
+        const factory = kind === 'nasahd' ? buildNasaHdLayer : buildNasaLayer;
+        bases[kind] = factory(newDate, newDaysBack);
+      }
+    }
+  });
+}
+
 // Layer-Factories für datierbare Sat-Quellen
-function buildNasaLayer(date) {
-  return L.tileLayer(
+function buildNasaLayer(date, daysBack = 0) {
+  const layer = L.tileLayer(
     `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
     { attribution: '© NASA GIBS / VIIRS · ' + date, maxZoom: 18, maxNativeZoom: 9, tileSize: 256 }
   );
+  attachAutoFallback(layer, 'nasa', date, daysBack);
+  return layer;
 }
-function buildNasaHdLayer(date) {
+function buildNasaHdLayer(date, daysBack = 3) {
   // HLS_S30 = Sentinel-2 Harmonized, 30m, weekly composite (Zoom bis 12)
-  return L.tileLayer(
+  const layer = L.tileLayer(
     `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/HLS_S30_Nadir_BRDF_Adjusted_Reflectance/default/${date}/GoogleMapsCompatible_Level12/{z}/{y}/{x}.jpg`,
     { attribution: '© NASA HLS (Sentinel-2 harmonized) · ' + date, maxZoom: 18, maxNativeZoom: 12, tileSize: 256 }
   );
+  attachAutoFallback(layer, 'nasahd', date, daysBack);
+  return layer;
 }
 
 let sentinelConfig = null; // { instanceId, endpoint }
@@ -446,9 +490,9 @@ function switchBase(key, btn) {
   activeBase.bringToBack && activeBase.bringToBack();
   const sdRow = document.getElementById('satDateRow');
   sdRow.style.display = (key === 'nasa' || key === 'nasahd') ? 'flex' : 'none';
-  // Bei HLS sinnvolles Default-Datum (1 Woche zurück, da nicht täglich verfügbar)
-  if (key === 'nasahd') document.getElementById('satDate').value = gibsDate(7);
-  if (key === 'nasa') document.getElementById('satDate').value = gibsDate(1);
+  // Default: HEUTE (mit Auto-Fallback bei Tile-Errors auf gestern/vorgestern)
+  if (key === 'nasahd') document.getElementById('satDate').value = gibsDate(0);
+  if (key === 'nasa') document.getElementById('satDate').value = gibsDate(0);
   persistLayers();
 }
 // Bestehende Buttons auf switchBase umstellen
@@ -464,19 +508,21 @@ document.querySelectorAll('.basemap-btn').forEach(b => { b.onclick = () => switc
   if (btn) switchBase(target, btn);
 })();
 
-// NASA-Date-Picker initialisieren
+// NASA-Date-Picker initialisieren - Default HEUTE, max HEUTE
 const satDateInput = document.getElementById('satDate');
 if (satDateInput) {
-  const yesterday = gibsDate(1);
-  satDateInput.value = yesterday;
-  satDateInput.max = yesterday;
+  const today = gibsDate(0);
+  satDateInput.value = today;
+  satDateInput.max = today;
   satDateInput.addEventListener('change', () => {
     const d = satDateInput.value;
     if (!d) return;
+    // Wieviele Tage zurück? Wird für Auto-Fallback-Berechnung gebraucht
+    const daysBack = Math.max(0, Math.round((Date.now() - new Date(d).getTime()) / 86400000));
     const isHd = activeBaseKey === 'nasahd';
     if (activeBaseKey === 'nasa' || isHd) map.removeLayer(activeBase);
-    if (isHd) bases.nasahd = buildNasaHdLayer(d);
-    else bases.nasa = buildNasaLayer(d);
+    if (isHd) bases.nasahd = buildNasaHdLayer(d, daysBack);
+    else bases.nasa = buildNasaLayer(d, daysBack);
     if (activeBaseKey === 'nasa' || isHd) {
       activeBase = bases[activeBaseKey].addTo(map);
       activeBase.bringToBack && activeBase.bringToBack();
@@ -516,9 +562,9 @@ function toggleCompare() {
   if (!compareMode) {
     // Vor-Konfigurieren: Standarddaten (vor 60 Tagen vs gestern)
     document.getElementById('cmpLeftDate').value = gibsDate(60);
-    document.getElementById('cmpLeftDate').max = gibsDate(1);
-    document.getElementById('cmpRightDate').value = gibsDate(1);
-    document.getElementById('cmpRightDate').max = gibsDate(1);
+    document.getElementById('cmpLeftDate').max = gibsDate(0);
+    document.getElementById('cmpRightDate').value = gibsDate(0);
+    document.getElementById('cmpRightDate').max = gibsDate(0);
     map.removeLayer(activeBase); // aktuelle Basemap aus
     compareMode = true;
     rebuildCompareLayers();
