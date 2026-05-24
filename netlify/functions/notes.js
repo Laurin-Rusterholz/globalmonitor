@@ -94,6 +94,8 @@ exports.handler = async (event) => {
       };
       if (typeof body.la === 'number') note.la = body.la;
       if (typeof body.lo === 'number') note.lo = body.lo;
+      // AI-Dossier: vollständiges Dossier-Objekt mitspeichern für Rich-Render bei Wiederöffnen
+      if (body.dossier && typeof body.dossier === 'object') note.dossier = body.dossier;
       await store.setJSON(id, note);
       return json({ id, ...note });
     }

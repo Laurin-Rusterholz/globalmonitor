@@ -3381,19 +3381,11 @@ async function generateDossierIn(iso, name, scope, deep = false) {
       const d = await generateDossierDirect(iso, name, scope, ctx, deep);
       clearInterval(prog);
       renderInlineDossier(target, d);
-      toast(`${deep ? '🔬 Tiefendossier' : 'Dossier'} fertig${d.webSources?.length ? ' (' + d.webSources.length + ' Web-Quellen)' : ''}`);
-      // Auto-save: als Notiz in Netlify Blobs (falls verfügbar)
-      try {
-        await fetch(`${CONFIG.BACKEND_BASE}/notes`, {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({
-            iso, title: `${deep ? '🔬 Tiefendossier' : 'AI-Dossier'} ${scope}: ${name}`,
-            content: JSON.stringify(d, null, 2),
-            type: 'ai-dossier', tags: ['ai', scope, ...(deep?['deep','web']:[])],
-            dossier: d
-          })
-        }).catch(()=>{});
-      } catch {}
+      const saveResult = await saveDossierAsNote(iso, name, scope, deep, d);
+      const savedMsg = saveResult.ok
+        ? ` · 💾 als Notiz gespeichert`
+        : ` · ⚠ Speichern fehlgeschlagen: ${saveResult.err}`;
+      toast(`${deep ? '🔬 Tiefendossier' : 'Dossier'} fertig${d.webSources?.length ? ' (' + d.webSources.length + ' Web-Quellen)' : ''}${savedMsg}`);
       loadNotesForCountry(iso);
     } catch (e) {
       clearInterval(prog);
@@ -3815,21 +3807,11 @@ async function generateDossier(iso, countryName, scope, deep = false) {
       economic: currentRegion?.economic,
     };
     let data;
+    let saveResult = null;
     if (USE_DIRECT_ANTHROPIC) {
       // Direct-Browser: kein Netlify-Limit, Sonnet 4.6 + ggf. Web
       data = await generateDossierDirect(iso, countryName, scope, ctx, deep);
-      // Speichern als Notiz best-effort
-      try {
-        await fetch(`${CONFIG.BACKEND_BASE}/notes`, {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({
-            iso, title: `${deep ? '🔬 Tiefendossier' : 'AI-Dossier'} ${scope}: ${countryName}`,
-            content: JSON.stringify(data, null, 2),
-            type: 'ai-dossier', tags: ['ai', scope, ...(deep?['deep','web']:[])],
-            dossier: data
-          })
-        }).catch(()=>{});
-      } catch {}
+      saveResult = await saveDossierAsNote(iso, countryName, scope, deep, data);
     } else if (deep) {
       data = await window.runBackgroundJob('dossier', {
         iso, countryName, scope, context: ctx, webSearch: true, save: true
@@ -3847,7 +3829,10 @@ async function generateDossier(iso, countryName, scope, deep = false) {
       catch { throw new Error(`kein JSON (HTTP ${res.status})`); }
       if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
     }
-    toast(deep ? `🔬 Tiefendossier fertig${data.webSources?.length ? ' (' + data.webSources.length + ' Web-Quellen)' : ''}` : 'Dossier gespeichert');
+    const savedMsg = saveResult
+      ? (saveResult.ok ? ' · 💾 als Notiz gespeichert' : ` · ⚠ Speichern: ${saveResult.err}`)
+      : (data.savedAs ? ' · 💾 gespeichert' : '');
+    toast(`${deep ? '🔬 Tiefendossier' : 'Dossier'} fertig${data.webSources?.length ? ' (' + data.webSources.length + ' Web-Quellen)' : ''}${savedMsg}`);
     loadNotesForCountry(iso);
     if (data.savedAs) openDocument(data.savedAs);
     else openDocumentInline(data);
@@ -3857,6 +3842,36 @@ async function generateDossier(iso, countryName, scope, deep = false) {
   }
   if (progInt) clearInterval(progInt);
   if (btn) { btn.disabled = false; btn.textContent = orig; }
+}
+
+// Speichert ein KI-Dossier als persistente Notiz (Netlify Blobs).
+// Returns {ok:true, id} bei Erfolg, {ok:false, err} bei Fehler.
+// Wird vom Direct-Browser-Pfad genutzt (Backend speichert selbst).
+async function saveDossierAsNote(iso, countryName, scope, deep, dossier) {
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_BASE}/notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        iso,
+        title: `${deep ? '🔬 Tiefendossier' : 'AI-Dossier'} ${scope}: ${countryName}`,
+        content: JSON.stringify(dossier, null, 2),
+        type: 'ai-dossier',
+        tags: ['ai', scope, ...(deep ? ['deep', 'web'] : [])],
+        dossier,
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      return { ok: false, err: `HTTP ${res.status}: ${t.slice(0, 80)}` };
+    }
+    const data = await res.json().catch(() => null);
+    if (data?.error) return { ok: false, err: data.error };
+    if (data?.blobsUnavailable) return { ok: false, err: 'Netlify Blobs nicht konfiguriert (NETLIFY_API_TOKEN + NETLIFY_SITE_ID fehlt)' };
+    return { ok: true, id: data?.id };
+  } catch (e) {
+    return { ok: false, err: e.message || String(e) };
+  }
 }
 
 async function openDocument(id) {
@@ -3879,53 +3894,94 @@ function openDocumentInline(dossier) {
 }
 
 function showDocumentModal(note) {
-  const modal = document.getElementById('docModal');
   const body = document.getElementById('docModalBody');
   const titleEl = document.getElementById('docModalTitle');
   titleEl.textContent = note.title || 'Dokument';
   document.getElementById('docModalMeta').textContent =
     `${note.type==='ai-dossier'?'AI-Dossier':'Notiz'} · ${new Date(note.created).toLocaleString('de-CH')}`;
 
-  let html = '';
-  if (note.type === 'ai-dossier' && note.dossier) {
-    const d = note.dossier;
-    if (d.summary) html += `<div class="doc-summary">${escapeHtml(d.summary)}</div>`;
-    if (d.sections) {
-      const labels = {profile:'Politisches Profil',economy:'Wirtschaft',industries:'Kernindustrien',trade:'Handelspartner',military:'Militärische Stärke',doctrine:'Militärische Doktrin',regionalRole:'Rolle in der Region',globalRole:'Globale Rolle',hotspots:'Brennpunkte'};
-      Object.entries(d.sections).forEach(([k,v]) => {
-        html += `<div class="doc-section"><h3>${labels[k]||k}</h3><div>${markdownish(v)}</div></div>`;
-      });
-    }
-    if (d.keyFacts) {
-      html += `<div class="doc-section"><h3>Key Facts</h3><div class="doc-kf">`;
-      const kf = d.keyFacts;
-      if (kf.industries?.length) html += `<div><b>Industrien:</b> ${kf.industries.join(', ')}</div>`;
-      if (kf.tradePartners) {
-        if (kf.tradePartners.export?.length) html += `<div><b>Exportpartner:</b> ${kf.tradePartners.export.join(', ')}</div>`;
-        if (kf.tradePartners.import?.length) html += `<div><b>Importpartner:</b> ${kf.tradePartners.import.join(', ')}</div>`;
-      }
-      if (kf.militaryActive) html += `<div><b>Aktive Soldaten:</b> ${kf.militaryActive}</div>`;
-      if (kf.militaryBudget) html += `<div><b>Mil-Budget:</b> ${kf.militaryBudget}</div>`;
-      if (kf.nuclearWeapons) html += `<div><b>Atomwaffen:</b> ${kf.nuclearWeapons}</div>`;
-      if (kf.majorAllies?.length) html += `<div><b>Hauptverbündete:</b> ${kf.majorAllies.join(', ')}</div>`;
-      if (kf.majorAdversaries?.length) html += `<div><b>Hauptgegner:</b> ${kf.majorAdversaries.join(', ')}</div>`;
-      html += `</div></div>`;
-    }
-    if (d.confidence) html += `<div class="doc-confidence">Confidence: <b>${d.confidence}</b> · ${escapeHtml(d.sourceNote||'')}</div>`;
-  } else {
-    html = `<div class="doc-section"><div>${markdownish(note.content||'')}</div></div>`;
+  // Dossier-Objekt rekonstruieren falls nur als content (JSON-String) gespeichert
+  let dossier = note.dossier;
+  if (!dossier && note.type === 'ai-dossier' && note.content) {
+    try {
+      const parsed = JSON.parse(note.content);
+      if (parsed && (parsed.sections || parsed.summary)) dossier = parsed;
+    } catch {}
   }
-  body.innerHTML = html;
+  if (note.type === 'ai-dossier' && dossier) {
+    renderInlineDossier(body, dossier);
+  } else {
+    body.innerHTML = `<div class="doc-section"><div>${markdownish(note.content||'')}</div></div>`;
+  }
   openModal('docModal');
 }
 
+// Erweiterter Markdown-Renderer:
+// - ## Heading  → <h4>
+// - ### Heading → <h5>
+// - **bold**, *italic*
+// - - item / * item → <ul><li>
+// - 1. item → <ol><li>
+// - > quote → <blockquote>
+// - Paragraphen durch leere Zeilen
 function markdownish(text) {
   if (!text) return '';
-  return escapeHtml(text)
-    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
-    .replace(/\n\n/g, '</p><p>')
-    .replace(/\n/g, '<br>')
-    .replace(/^/, '<p>').concat('</p>');
+  const lines = String(text).split('\n');
+  let html = '';
+  let inUl = false, inOl = false, inP = false, inBq = false;
+  const closeP = () => { if (inP) { html += '</p>'; inP = false; } };
+  const closeUl = () => { if (inUl) { html += '</ul>'; inUl = false; } };
+  const closeOl = () => { if (inOl) { html += '</ol>'; inOl = false; } };
+  const closeBq = () => { if (inBq) { html += '</blockquote>'; inBq = false; } };
+  const closeAll = () => { closeP(); closeUl(); closeOl(); closeBq(); };
+
+  const inlineFormat = (s) => escapeHtml(s)
+    .replace(/\*\*([^*\n]+?)\*\*/g, '<b>$1</b>')
+    .replace(/(?<![*\w])\*([^*\n]+?)\*(?!\w)/g, '<i>$1</i>')
+    .replace(/`([^`\n]+?)`/g, '<code>$1</code>');
+
+  for (let raw of lines) {
+    const line = raw.trim();
+    if (!line) { closeAll(); continue; }
+    // Headings
+    let m;
+    if ((m = line.match(/^####\s+(.+)$/))) { closeAll(); html += `<h6>${inlineFormat(m[1])}</h6>`; continue; }
+    if ((m = line.match(/^###\s+(.+)$/)))  { closeAll(); html += `<h5>${inlineFormat(m[1])}</h5>`; continue; }
+    if ((m = line.match(/^##\s+(.+)$/)))   { closeAll(); html += `<h4>${inlineFormat(m[1])}</h4>`; continue; }
+    if ((m = line.match(/^#\s+(.+)$/)))    { closeAll(); html += `<h3>${inlineFormat(m[1])}</h3>`; continue; }
+    // Blockquote
+    if ((m = line.match(/^>\s+(.+)$/))) {
+      closeP(); closeUl(); closeOl();
+      if (!inBq) { html += '<blockquote>'; inBq = true; }
+      html += inlineFormat(m[1]) + '<br>';
+      continue;
+    }
+    // Unordered list
+    if ((m = line.match(/^[-*]\s+(.+)$/))) {
+      closeP(); closeOl(); closeBq();
+      if (!inUl) { html += '<ul>'; inUl = true; }
+      html += `<li>${inlineFormat(m[1])}</li>`;
+      continue;
+    }
+    // Ordered list
+    if ((m = line.match(/^\d+\.\s+(.+)$/))) {
+      closeP(); closeUl(); closeBq();
+      if (!inOl) { html += '<ol>'; inOl = true; }
+      html += `<li>${inlineFormat(m[1])}</li>`;
+      continue;
+    }
+    // HR
+    if (/^(-{3,}|_{3,}|\*{3,})$/.test(line)) {
+      closeAll(); html += '<hr>'; continue;
+    }
+    // Paragraph
+    closeUl(); closeOl(); closeBq();
+    if (!inP) { html += '<p>'; inP = true; }
+    else { html += '<br>'; }
+    html += inlineFormat(line);
+  }
+  closeAll();
+  return html;
 }
 
 function openNoteModal(iso, countryName, latlng = null) {
