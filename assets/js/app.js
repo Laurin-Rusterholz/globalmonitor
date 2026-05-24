@@ -288,7 +288,7 @@ function syncUrl() {
    PANEL-MANAGER (Mutual Exclusion)
    ════════════════════════════════════════════════════════════════ */
 const SIDE_PANELS = ['ai', 'osint', 'briefing', 'comparePanel', 'pinPanel', 'researchPanel', 'projectPanel'];
-const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal', 'newProjectModal', 'projectNoteModal', 'orgBrowserModal', 'orgProfileModal', 'materialModal', 'focusModal', 'apiKeyModal', 'addElementModal'];
+const MODALS = ['countryDossierModal', 'docModal', 'noteEditModal', 'pinAddModal', 'sourcesModal', 'notifyModal', 'newProjectModal', 'projectNoteModal', 'orgBrowserModal', 'orgProfileModal', 'materialModal', 'focusModal', 'apiKeyModal', 'addElementModal', 'notesOverviewModal'];
 
 function openSidePanel(id) {
   SIDE_PANELS.forEach(p => {
@@ -1029,16 +1029,18 @@ window.openWebsearch = function(query, scope = 'news', topic = null) {
 
 window.analyzeEvent = async function(type, lat, lng, title, useWebSearch) {
   map.closePopup();
+  // Event-Typ für Auto-Save-Tags merken (wird in sendQuestion gelesen)
+  window._lastEventType = type;
   // Sidemenu öffnen mit Region
   await openRegion(lat, lng, title);
-  // Auto-Question im AI-Chat triggern
   const q = useWebSearch
     ? `Recherchiere aktuell im Web: Was ist über das Ereignis "${title}" bei ${lat.toFixed(2)},${lng.toFixed(2)} bekannt? Welche Quellen berichten was? Wann fand es statt, wer ist involviert, welche Konsequenzen?`
     : `Analysiere das Ereignis "${title}" bei ${lat.toFixed(2)},${lng.toFixed(2)}: Was ist passiert, wer sind die Akteure, in welchen größeren Konflikt-/Geo-Kontext gehört es?`;
   askInput.value = q;
-  // Web-Search-Flag temporär aktivieren
   if (useWebSearch) window._nextAiUseWebSearch = true;
   sendQuestion();
+  // Cleanup nach kurzem Delay
+  setTimeout(() => { window._lastEventType = null; }, 500);
 };
 
 window.analyzeProfiteers = async function(type, lat, lng, title) {
@@ -2085,12 +2087,21 @@ Beantworte präzise, faktenbasiert, mit konkreten Namen (Akteure, Häfen, Pipeli
       sourcesNote.textContent = '🔍 Mit Online-Recherche generiert';
       el.appendChild(sourcesNote);
     }
-    // Auto-Save als Research-Dokument
+    // Auto-Save als Research-Dokument mit reichen Tags für Spider-Verknüpfung
     if (currentRegion?.iso2) {
       const titleStub = q.slice(0, 80).replace(/\s+/g,' ');
       const type = q.toLowerCase().includes('profit') ? 'ai-profiteers' : 'ai-chat';
       const fullContent = `**Frage:** ${q}\n\n**Antwort:**\n${text}\n\n${useWebSearch?'_Mit Online-Recherche generiert._':''}`;
-      autoSaveAiOutput(currentRegion.iso2, titleStub, fullContent, type, [useWebSearch?'web-search':'static-context']);
+      const baseTags = [
+        currentRegion.iso2,
+        useWebSearch ? 'web-recherche' : 'offline',
+        'ki-chat'
+      ];
+      if (window._lastEventType) baseTags.push(window._lastEventType);
+      if (currentRegion.name) baseTags.push(currentRegion.name.slice(0, 30));
+      // Stichwörter aus der Frage extrahieren (>3 Buchstaben, max 5)
+      const keywords = (q.match(/\b[A-ZÄÖÜ][a-zäöüß]{3,}\b/g) || []).slice(0, 5);
+      autoSaveAiOutput(currentRegion.iso2, titleStub, fullContent, type, [...baseTags, ...keywords]);
     }
   } catch (err) {
     el.classList.remove('thinking');
@@ -4276,7 +4287,7 @@ document.getElementById('closeComparePanel')?.addEventListener('click', () => {
 });
 
 function renderComparePanel() {
-  const body = document.getElementById('comparePanelBody');
+  const body = document.getElementById('cmpStaticContent') || document.getElementById('comparePanelBody');
   if (!body) return;
   if (!comparedCountries.length) {
     body.innerHTML = '<div style="padding:40px;text-align:center;color:var(--ink-dim)">Keine Länder im Vergleich</div>';
@@ -4385,16 +4396,37 @@ LÄNDER:
 ${countriesText}`;
 
   try {
-    const data = await callAi({ system: sys, messages: [{role:'user', content: focus}], maxTokens: 2000 });
+    const data = await callAi({ system: sys, messages: [{role:'user', content: focus}], maxTokens: 4000 });
     const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim() || '(keine Antwort)';
-    answer.innerHTML = text.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
-    // Auto-Save Vergleichs-Analyse als Notiz für jedes beteiligte Land
+    // Auto-Save für JEDES beteiligte Land (gleiche Notiz erscheint in jedem Land-Profil)
     const titles = comparedCountries.map(c => c.name).join(' × ');
-    comparedCountries.forEach(c => {
-      autoSaveAiOutput(c.iso, `Beziehungs-Analyse: ${titles}`, `**Fokus:** ${focus}\n\n**Antwort:**\n${text}`, 'ai-comparison', comparedCountries.map(c=>c.iso));
-    });
+    const isos = comparedCountries.map(c => c.iso);
+    const noteTitle = `Beziehungs-Analyse: ${titles}`;
+    const noteContent = `**Fokus:** ${focus}\n\n${text}`;
+    const noteTags = ['ai-comparison', 'beziehungs-analyse', ...isos];
+    const savedIds = [];
+    for (const c of comparedCountries) {
+      const r = await autoSaveAiOutput(c.iso, noteTitle, noteContent, 'ai-comparison', noteTags);
+      if (r?.id) savedIds.push(r.id);
+    }
+    // Rendern mit vollem Markdown + Action-Buttons
+    const savedLabel = savedIds.length === comparedCountries.length
+      ? `💾 Notiz auf allen ${comparedCountries.length} Ländern gespeichert`
+      : savedIds.length ? `⚠ Notiz nur teilweise gespeichert (${savedIds.length}/${comparedCountries.length})` : `⚠ Notiz nicht gespeichert (Blobs nicht konfiguriert?)`;
+    answer.innerHTML = `
+      <div style="font-size:10.5px;color:var(--ink-faint);margin-bottom:8px">${savedLabel} · Modell: ${escapeHtml(data.model||'?')}</div>
+      ${markdownish(text)}
+      <div class="cmp-ai-answer-actions">
+        <button class="tb-btn" onclick="window.openWebsearch('${escapeHtml(titles).replace(/'/g,"\\'")}', 'news', '${escapeHtml(focus.slice(0,60)).replace(/'/g,"\\'")}')">🌐 Web-Suche zu allen</button>
+        ${savedIds[0] ? `<button class="tb-btn" onclick="openDocument('${savedIds[0]}')">📄 Als Notiz öffnen</button>` : ''}
+        <button class="tb-btn" onclick="window.openNotesOverview()">📒 Alle Notizen</button>
+      </div>`;
+    answer.classList.add('show');
+    // Scroll zu Answer (sichtbar machen)
+    setTimeout(() => answer.scrollIntoView({ behavior:'smooth', block:'start' }), 100);
   } catch (e) {
-    answer.innerHTML = '<span style="color:var(--conflict)">Fehler: '+e.message+'</span>';
+    answer.innerHTML = '<span style="color:var(--conflict)">Fehler: '+escapeHtml(e.message)+'</span>';
+    answer.classList.add('show');
   }
   btn.disabled = false; btn.textContent = '⚡ Beziehungs-Analyse via KI';
 }
@@ -7571,3 +7603,230 @@ document.getElementById('aeSave')?.addEventListener('click', () => {
 
 // Beim App-Start: bestehende User-Elemente platzieren (nach R-Load damit Layers existieren)
 setTimeout(renderAllUserElements, 800);
+
+/* ════════════════════════════════════════════════════════════════
+   NOTIZEN-ÜBERSICHT: alle Notizen über alle Länder + Spider-Graph
+   ════════════════════════════════════════════════════════════════ */
+let _allNotesCache = [];
+let _activeTagFilter = new Set();
+let _notesSearchTerm = '';
+let _notesTypeFilter = '';
+let _notesView = 'list';
+let _notesSpiderNetwork = null;
+
+async function loadAllNotes() {
+  if (!CONFIG.USE_BACKEND) return [];
+  try {
+    const r = await fetch(`${CONFIG.BACKEND_BASE}/notes`);
+    if (!r.ok) return [];
+    const data = await r.json();
+    return data.notes || [];
+  } catch (e) {
+    console.warn('loadAllNotes fail:', e.message);
+    return [];
+  }
+}
+
+window.openNotesOverview = async function() {
+  openModal('notesOverviewModal');
+  document.getElementById('notesListView').innerHTML = '<div class="notes-empty">Lade Notizen…</div>';
+  _allNotesCache = await loadAllNotes();
+  _activeTagFilter.clear();
+  _notesSearchTerm = '';
+  _notesTypeFilter = '';
+  document.getElementById('notesSearch').value = '';
+  document.getElementById('notesTypeFilter').value = '';
+  renderNotesOverview();
+};
+
+function getFilteredNotes() {
+  let notes = _allNotesCache;
+  if (_notesSearchTerm) {
+    const q = _notesSearchTerm.toLowerCase();
+    notes = notes.filter(n =>
+      (n.title || '').toLowerCase().includes(q) ||
+      (n.content || '').toLowerCase().includes(q) ||
+      (n.tags || []).some(t => String(t).toLowerCase().includes(q)) ||
+      (n.iso || '').toLowerCase().includes(q)
+    );
+  }
+  if (_notesTypeFilter) notes = notes.filter(n => n.type === _notesTypeFilter);
+  if (_activeTagFilter.size) {
+    notes = notes.filter(n => {
+      const tags = (n.tags || []).map(t => String(t));
+      return [..._activeTagFilter].every(ft => tags.includes(ft));
+    });
+  }
+  return notes;
+}
+
+function collectAllTags(notes) {
+  const counts = new Map();
+  notes.forEach(n => (n.tags || []).forEach(t => {
+    const k = String(t);
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }));
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function renderNotesOverview() {
+  const filtered = getFilteredNotes();
+  const tags = collectAllTags(_allNotesCache);
+  document.getElementById('notesCount').textContent = `${filtered.length}/${_allNotesCache.length} Notizen · ${tags.length} Tags`;
+
+  // Tag-Leiste
+  const tagBar = document.getElementById('notesTagBar');
+  if (!tags.length) {
+    tagBar.innerHTML = '<span style="font-size:10.5px;color:var(--ink-faint)">Noch keine Tags</span>';
+  } else {
+    tagBar.innerHTML = tags.slice(0, 60).map(([t, cnt]) => {
+      const active = _activeTagFilter.has(t) ? ' active' : '';
+      return `<span class="notes-tag-chip${active}" data-tag="${escapeHtml(t)}">${escapeHtml(t)} <span class="cnt">${cnt}</span></span>`;
+    }).join('');
+    tagBar.querySelectorAll('.notes-tag-chip').forEach(el => {
+      el.onclick = () => {
+        const t = el.dataset.tag;
+        if (_activeTagFilter.has(t)) _activeTagFilter.delete(t);
+        else _activeTagFilter.add(t);
+        renderNotesOverview();
+      };
+    });
+  }
+
+  if (_notesView === 'list') {
+    renderNotesListView(filtered);
+  } else {
+    renderNotesSpiderView(filtered);
+  }
+}
+
+function renderNotesListView(notes) {
+  document.getElementById('notesListView').style.display = 'block';
+  document.getElementById('notesSpiderView').style.display = 'none';
+  const target = document.getElementById('notesListView');
+  if (!notes.length) {
+    target.innerHTML = '<div class="notes-empty">Keine Notizen entsprechen den Filtern.</div>';
+    return;
+  }
+  target.innerHTML = notes.map(n => {
+    const cName = window.getCountryProfile?.(n.iso)?.name || n.iso;
+    const snippet = (n.content || '').replace(/[#*`>_\[\]\\]/g, '').replace(/\s+/g, ' ').trim().slice(0, 220);
+    const tagHtml = (n.tags || []).slice(0, 6).map(t => `<span class="notes-item-tag">${escapeHtml(t)}</span>`).join('');
+    const typeBadge = n.type === 'ai-dossier' ? '📊 Dossier' :
+                      n.type === 'ai-comparison' ? '🔗 Vergleich' :
+                      n.type === 'ai-briefing' ? '📅 Briefing' :
+                      n.type === 'ai-chat' ? '💬 Chat' :
+                      n.type === 'ai-snapshot' ? '📸 Snapshot' : '📝 Notiz';
+    return `<div class="notes-item" data-id="${escapeHtml(n.id)}">
+      <div class="notes-item-head">
+        <span class="notes-item-title">${flagEmoji(n.iso)} ${escapeHtml(n.title || 'Ohne Titel')}</span>
+        <span class="notes-item-meta">${typeBadge} · ${new Date(n.created || 0).toLocaleDateString('de-CH')}</span>
+      </div>
+      ${snippet ? `<div class="notes-item-snippet">${escapeHtml(snippet)}</div>` : ''}
+      <div class="notes-item-tags">
+        <span class="notes-item-iso">${escapeHtml(n.iso || '?')}${cName!==n.iso ? ' · '+escapeHtml(cName) : ''}</span>
+        ${tagHtml}
+      </div>
+    </div>`;
+  }).join('');
+  target.querySelectorAll('.notes-item').forEach(el => {
+    el.onclick = () => openDocument(el.dataset.id);
+  });
+}
+
+function renderNotesSpiderView(notes) {
+  document.getElementById('notesListView').style.display = 'none';
+  document.getElementById('notesSpiderView').style.display = 'block';
+  const container = document.getElementById('notesSpiderGraph');
+  if (typeof vis === 'undefined' || !vis.Network) {
+    container.innerHTML = '<div class="notes-empty">Spider-Bibliothek (vis-network) nicht geladen.</div>';
+    return;
+  }
+  if (!notes.length) {
+    container.innerHTML = '<div class="notes-empty">Keine Notizen für Spider.</div>';
+    return;
+  }
+
+  // Build Knoten + Kanten: Notizen + Tags, verbunden über tags-Array
+  const nodes = [];
+  const edges = [];
+  const tagNodes = new Map();
+  notes.forEach(n => {
+    nodes.push({
+      id: 'n_' + n.id,
+      label: (n.title || '').slice(0, 28) + (n.title?.length > 28 ? '…' : ''),
+      group: 'note',
+      title: `${n.title}\n${n.iso || ''} · ${n.type || ''}\n${(n.tags || []).join(', ')}`,
+      shape: 'dot', size: 14, color: { background: '#21c7d6', border: '#0a8090' },
+      font: { color: '#fff', size: 11, face: 'Inter, sans-serif' },
+      noteId: n.id
+    });
+    (n.tags || []).forEach(t => {
+      const tk = String(t);
+      if (!tagNodes.has(tk)) {
+        tagNodes.set(tk, true);
+        nodes.push({
+          id: 't_' + tk,
+          label: tk,
+          group: 'tag',
+          shape: 'box',
+          color: { background: '#2a2a3e', border: '#bf5af2' },
+          font: { color: '#bf5af2', size: 12, face: 'Inter, sans-serif' },
+          margin: 6
+        });
+      }
+      edges.push({ from: 'n_' + n.id, to: 't_' + tk, color: { color: '#3a3a4e', opacity: 0.6 } });
+    });
+  });
+
+  if (_notesSpiderNetwork) {
+    _notesSpiderNetwork.destroy();
+    _notesSpiderNetwork = null;
+  }
+  _notesSpiderNetwork = new vis.Network(container, { nodes, edges }, {
+    physics: {
+      enabled: true,
+      barnesHut: { gravitationalConstant: -3000, centralGravity: 0.2, springLength: 110, springConstant: 0.05 },
+      stabilization: { iterations: 200 }
+    },
+    interaction: { hover: true, tooltipDelay: 200, zoomView: true, dragView: true },
+    nodes: { borderWidth: 2, shadow: { enabled: true, color: 'rgba(0,0,0,0.5)', size: 6 } },
+    edges: { width: 1, smooth: { type: 'continuous' } },
+  });
+  _notesSpiderNetwork.on('click', (params) => {
+    if (params.nodes.length) {
+      const id = params.nodes[0];
+      const node = nodes.find(n => n.id === id);
+      if (!node) return;
+      if (node.group === 'note' && node.noteId) {
+        openDocument(node.noteId);
+      } else if (node.group === 'tag') {
+        // Toggle tag filter
+        const tag = id.slice(2);
+        if (_activeTagFilter.has(tag)) _activeTagFilter.delete(tag);
+        else _activeTagFilter.add(tag);
+        renderNotesOverview();
+      }
+    }
+  });
+}
+
+// Listeners
+document.getElementById('notesBtn')?.addEventListener('click', () => window.openNotesOverview());
+document.getElementById('notesSearch')?.addEventListener('input', (e) => {
+  _notesSearchTerm = e.target.value;
+  renderNotesOverview();
+});
+document.getElementById('notesTypeFilter')?.addEventListener('change', (e) => {
+  _notesTypeFilter = e.target.value;
+  renderNotesOverview();
+});
+document.querySelectorAll('button[data-nview]').forEach(b => {
+  b.onclick = () => {
+    _notesView = b.dataset.nview;
+    document.querySelectorAll('button[data-nview]').forEach(x => x.classList.toggle('active', x.dataset.nview === _notesView));
+    renderNotesOverview();
+  };
+});
+// Default-Active: List
+document.querySelector('button[data-nview="list"]')?.classList.add('active');
