@@ -553,6 +553,32 @@ const LAYERS = {
   userNotes:   {n:'Eigene Notizen',         c:'#ffc83d', cat:'user', on:true},
 };
 
+// Symbol pro Layer für Map-Marker (Unicode-Glyphs, universell verfügbar)
+const LAYER_SYMBOLS = {
+  nuclear: '☢', ports: '⚓', navalBases: '⛵', airBases: '✈', bases: '🛡',
+  exercises: '⚔', launchSites: '🚀', bri: '🛤', choke: '⚠',
+  resOil: '🛢', resGas: '🔥', resLi: '🔋', resRee: '💎',
+  resCu: '⚒', resU: '☢', resFe: '⛏',
+  sanctions: '🚫', action: '💥', conflict: '⚔', battle: '💥', protest: '✊',
+  quake: '〰', disaster: '⚠',
+};
+const BRI_TYPE_SYMBOLS = { port:'⚓', rail:'🚆', energy:'⚡', land:'🛣', zone:'🏭', air:'✈' };
+const BASE_TYPE_SYMBOLS = { naval:'⚓', air:'✈' };
+
+// Erzeugt einen Leaflet-Marker mit Symbol statt blossem Punkt.
+function iconMarker(latlng, layerKey, opts = {}) {
+  const symbol = opts.symbol || LAYER_SYMBOLS[layerKey] || '●';
+  const color = opts.color || LAYERS[layerKey]?.c || '#fff';
+  const size = opts.size || 22;
+  const extraCls = opts.area ? ' gli-area' : (opts.pulse ? ' gli-pulse' : '');
+  const html = `<div class="gli${extraCls}" style="color:${color}">${symbol}</div>`;
+  const icon = L.divIcon({
+    className: 'gm-layer-icon',
+    html, iconSize: [size, size], iconAnchor: [size/2, size/2]
+  });
+  return L.marker(latlng, { icon });
+}
+
 // LayerGroups initialisieren
 // Dense Layer mit Cluster, alle anderen normal
 const DENSE_LAYERS = ['ports','bases','navalBases','airBases','nuclear','launchSites','bri','exercises'];
@@ -932,96 +958,94 @@ function renderStatic() {
   });
   setCnt('cables', R.cables.length);
 
-  // Chokepoints
+  // Chokepoints (Symbol: ⚠)
   R.chokes.forEach(c => {
-    L.circleMarker([c.la, c.lo], {radius:6, color:LAYERS.choke.c, fillColor:LAYERS.choke.c, fillOpacity:.7, weight:2})
+    iconMarker([c.la, c.lo], 'choke', { size: 24 })
       .bindPopup(popup(c.n, `${c.d}<br><span class="row"><span>Tagesvolumen:</span><b>${c.volume}M $</b></span>`, LAYERS.choke.c, 'Chokepoint', c.la, c.lo))
       .addTo(LAYERS.choke.group);
   });
   setCnt('choke', R.chokes.length);
 
-  // Commercial ports
+  // Commercial ports (Symbol: ⚓)
   R.ports.forEach(p => {
-    L.circleMarker([p.la, p.lo], {radius:5, color:LAYERS.ports.c, fillColor:LAYERS.ports.c, fillOpacity:.7, weight:2})
+    iconMarker([p.la, p.lo], 'ports', { size: 22 })
       .bindPopup(popup(`⚓ ${p.n}`, `${p.d}<br><span class="row"><span>Land:</span><b>${p.country}</b></span>`, LAYERS.ports.c, 'Hafen', p.la, p.lo))
       .addTo(LAYERS.ports.group);
   });
   setCnt('ports', R.ports.length);
 
-  // Military bases - split by type
+  // Military bases - split by type (Symbole: ⚓ Naval, ✈ Air, 🛡 Base)
   let nNaval=0, nAir=0, nBase=0;
   R.militaryBases.forEach(b => {
-    let lg;
-    if (b.type === 'naval') { lg = LAYERS.navalBases; nNaval++; }
-    else if (b.type === 'air') { lg = LAYERS.airBases; nAir++; }
-    else { lg = LAYERS.bases; nBase++; }
-    const sym = b.type === 'naval' ? '⚓' : b.type === 'air' ? '✈' : '🛡';
-    L.circleMarker([b.la, b.lo], {
-      radius: 5, color: lg.c, fillColor: lg.c, fillOpacity: .6, weight: 1.5
-    })
-    .bindPopup(popup(`${sym} ${b.n}`, `${b.d}<br><span class="row"><span>Träger:</span><b>${b.country}</b></span>`, lg.c, b.type === 'naval' ? 'Militärhafen' : b.type === 'air' ? 'Luftwaffe' : 'Militärbasis', b.la, b.lo))
-    .addTo(lg.group);
+    let lg, layerKey;
+    if (b.type === 'naval') { lg = LAYERS.navalBases; layerKey = 'navalBases'; nNaval++; }
+    else if (b.type === 'air') { lg = LAYERS.airBases; layerKey = 'airBases'; nAir++; }
+    else { lg = LAYERS.bases; layerKey = 'bases'; nBase++; }
+    const sym = BASE_TYPE_SYMBOLS[b.type] || LAYER_SYMBOLS.bases;
+    iconMarker([b.la, b.lo], layerKey, { symbol: sym, size: 22 })
+      .bindPopup(popup(`${sym} ${b.n}`, `${b.d}<br><span class="row"><span>Träger:</span><b>${b.country}</b></span>`, lg.c, b.type === 'naval' ? 'Militärhafen' : b.type === 'air' ? 'Luftwaffe' : 'Militärbasis', b.la, b.lo))
+      .addTo(lg.group);
   });
   setCnt('bases', nBase); setCnt('navalBases', nNaval); setCnt('airBases', nAir);
 
-  // Exercises
+  // Exercises (Symbol: ⚔, Pulse-Animation für laufende Übung)
   R.exercises.forEach(e => {
-    L.circleMarker([e.la, e.lo], {radius:7, color:LAYERS.exercises.c, fillColor:LAYERS.exercises.c, fillOpacity:.3, weight:2, dashArray:'2 3'})
+    iconMarker([e.la, e.lo], 'exercises', { size: 24, pulse: true })
       .bindPopup(popup(`⚔ ${e.n}`, `${e.d}<br><span class="row"><span>Träger:</span><b>${e.country}</b></span>`, LAYERS.exercises.c, 'Militärübung', e.la, e.lo))
       .addTo(LAYERS.exercises.group);
   });
   setCnt('exercises', R.exercises.length);
 
-  // Launch sites
+  // Launch sites (Symbol: 🚀)
   R.launchSites.forEach(s => {
-    L.circleMarker([s.la, s.lo], {radius:6, color:LAYERS.launchSites.c, fillColor:LAYERS.launchSites.c, fillOpacity:.55, weight:2})
+    iconMarker([s.la, s.lo], 'launchSites', { size: 24 })
       .bindPopup(popup(`🚀 ${s.n}`, `${s.d}<br><span class="row"><span>Typ:</span><b>${s.type}</b></span><span class="row"><span>Land:</span><b>${s.country}</b></span>`, LAYERS.launchSites.c, 'Startplatz', s.la, s.lo))
       .addTo(LAYERS.launchSites.group);
   });
   setCnt('launchSites', R.launchSites.length);
 
-  // BRI projects
+  // BRI projects (Symbol je nach Typ)
   R.bri.forEach(p => {
-    const symMap = {port:'⚓', rail:'🚆', energy:'⚡', land:'🛣', zone:'🏭', air:'✈'};
-    L.circleMarker([p.la, p.lo], {radius:5, color:LAYERS.bri.c, fillColor:LAYERS.bri.c, fillOpacity:.55, weight:1.5})
-      .bindPopup(popup(`${symMap[p.type]||'•'} ${p.n}`, `${p.d}<br><span class="row"><span>Land:</span><b>${p.country}</b></span><span class="row"><span>Typ:</span><b>${p.type}</b></span>`, LAYERS.bri.c, 'BRI', p.la, p.lo))
+    const sym = BRI_TYPE_SYMBOLS[p.type] || '🛤';
+    iconMarker([p.la, p.lo], 'bri', { symbol: sym, size: 22 })
+      .bindPopup(popup(`${sym} ${p.n}`, `${p.d}<br><span class="row"><span>Land:</span><b>${p.country}</b></span><span class="row"><span>Typ:</span><b>${p.type}</b></span>`, LAYERS.bri.c, 'BRI', p.la, p.lo))
       .addTo(LAYERS.bri.group);
   });
   setCnt('bri', R.bri.length);
 
-  // Nuclear
+  // Nuclear (Symbol: ☢)
   R.nuclear.forEach(n => {
-    L.circleMarker([n.la, n.lo], {radius:6, color:LAYERS.nuclear.c, fillColor:LAYERS.nuclear.c, fillOpacity:.5, weight:2})
+    iconMarker([n.la, n.lo], 'nuclear', { size: 24 })
       .bindPopup(popup(`☢ ${n.n}`, `${n.d}<br><span class="row"><span>Reaktoren:</span><b>${n.reactors}</b></span><span class="row"><span>Land:</span><b>${n.country}</b></span>`, LAYERS.nuclear.c, 'Atomkraftwerk', n.la, n.lo))
       .addTo(LAYERS.nuclear.group);
   });
   setCnt('nuclear', R.nuclear.length);
 
-  // Resources split by type
+  // Resources split by type (Symbol je nach Rohstoff)
   const resMap = {oil:'resOil', gas:'resGas', lithium:'resLi', rare_earth:'resRee', cobalt:'resCu', copper:'resCu', uranium:'resU', iron:'resFe'};
   const resCount = {};
   R.resources.forEach(r => {
     const key = resMap[r.type] || 'resOil';
     const lg = LAYERS[key];
     resCount[key] = (resCount[key]||0)+1;
-    L.circleMarker([r.la, r.lo], {radius:5, color:lg.c, fillColor:lg.c, fillOpacity:.55, weight:1.5})
-      .bindPopup(popup(`⛏ ${r.n}`, `${r.d}<br><span class="row"><span>Typ:</span><b>${r.type}</b></span><span class="row"><span>Land:</span><b>${r.country}</b></span>`, lg.c, r.type, r.la, r.lo))
+    iconMarker([r.la, r.lo], key, { size: 22 })
+      .bindPopup(popup(`${LAYER_SYMBOLS[key]||'⛏'} ${r.n}`, `${r.d}<br><span class="row"><span>Typ:</span><b>${r.type}</b></span><span class="row"><span>Land:</span><b>${r.country}</b></span>`, lg.c, r.type, r.la, r.lo))
       .addTo(lg.group);
   });
   Object.entries(resCount).forEach(([k,v])=>setCnt(k,v));
 
-  // Sanctions
+  // Sanctions (Symbol: 🚫, Area-Style transparent für Land-Zentrum)
   R.sanctions.forEach(s => {
-    L.circleMarker([s.la, s.lo], {radius:9, color:LAYERS.sanctions.c, fillColor:LAYERS.sanctions.c, fillOpacity:.22, weight:2, dashArray:'3 3'})
-      .bindPopup(popup(s.n, `${s.d}<br><span class="row"><span>Regime:</span><b>${s.regime}</b></span>`, LAYERS.sanctions.c, 'Sanktioniert', s.la, s.lo))
+    iconMarker([s.la, s.lo], 'sanctions', { size: 28, area: true })
+      .bindPopup(popup(`🚫 ${s.n}`, `${s.d}<br><span class="row"><span>Regime:</span><b>${s.regime}</b></span>`, LAYERS.sanctions.c, 'Sanktioniert', s.la, s.lo))
       .addTo(LAYERS.sanctions.group);
   });
   setCnt('sanctions', R.sanctions.length);
 
-  // Military actions
+  // Military actions (Symbol: 💥, Pulse für aktive Aktion)
   R.militaryActions.forEach(a => {
-    L.circleMarker([a.la, a.lo], {radius:8, color:LAYERS.action.c, fillColor:LAYERS.action.c, fillOpacity:.35, weight:2})
-      .bindPopup(popup(`⚔ ${a.n}`, `${a.d}<br><span class="row"><span>Seit:</span><b>${a.since}</b></span>`, LAYERS.action.c, 'Militäraktion', a.la, a.lo))
+    iconMarker([a.la, a.lo], 'action', { size: 26, pulse: true })
+      .bindPopup(popup(`💥 ${a.n}`, `${a.d}<br><span class="row"><span>Seit:</span><b>${a.since}</b></span>`, LAYERS.action.c, 'Militäraktion', a.la, a.lo))
       .addTo(LAYERS.action.group);
   });
   setCnt('action', R.militaryActions.length);
@@ -3177,36 +3201,45 @@ const DOSSIER_SECTION_LABELS = {
 };
 async function generateDossierDirect(iso, countryName, scope, context, deep) {
   const sections = DOSSIER_SECTIONS[scope] || DOSSIER_SECTIONS.full;
-  const wordsPerSection = deep ? '350-550 Wörter' : (scope === 'full' ? '200-300 Wörter' : '280-400 Wörter');
-  const maxTokens = deep ? 14000 : (scope === 'full' ? 7000 : 4500);
+  // Direct-Browser hat KEIN Netlify-Zeitlimit → Sonnet darf richtig schreiben.
+  // Deutlich grösszügigere Wortzahlen + max_tokens als vorher.
+  const wordsPerSection = deep ? '600-900 Wörter' : (scope === 'full' ? '400-600 Wörter' : '600-900 Wörter');
+  const maxTokens = deep ? 20000 : (scope === 'full' ? 14000 : 10000);
 
-  const sys = `Du bist Senior-Geopolitik-Analyst${deep ? ' mit Web-Zugriff' : ''}. ${deep ? 'Recherchiere im Web aktuelle Zahlen/Programme/Beschlüsse (mind. 5-8 verschiedene Suchen). ' : ''}Liefere AUSSCHLIESSLICH JSON:
+  const sys = `Du bist Senior-Geopolitik-Analyst${deep ? ' mit Web-Zugriff' : ''}. ${deep ? 'Recherchiere im Web aktuelle Zahlen/Programme/Beschlüsse (mind. 6-10 verschiedene Suchen). ' : ''}Erstelle eine TIEFGEHENDE Analyse - das ist ein Senior-Briefing, nicht ein Wikipedia-Stub. Liefere AUSSCHLIESSLICH ein vollständiges JSON:
 
 {
-  "summary": "${deep ? '4-6' : '3-4'} Sätze Charakterisierung mit Spannungsfeldern",
+  "summary": "${deep ? '8-12' : '6-9'} Sätze: ausführliche Charakterisierung, historische Einbettung, aktuelle Spannungsfelder, strategische Position",
   "sections": {
-    ${sections.map(k => `"${k}": "Markdown. ${wordsPerSection}. Konkret mit Zahlen (BIP, Truppen, Budgets, %, Volumen), Namen (Personen, Programme), Daten (Beschlüsse, Wahlen, Verträge)."`).join(',\n    ')}
+    ${sections.map(k => `"${k}": "Markdown mit **Fettung** und mehreren Absätzen. ${wordsPerSection}. Sehr konkret mit Zahlen (BIP, Truppen, Budgets, %, Volumen, Stückzahlen), Namen (Personen mit Titel+Funktion, Organisationen, Programme, Verträge mit Nummern), Daten (Beschluss-Nummern, Wahlen, Vertragsdaten, Truppenstationierungen). Mindestens 3-5 Absätze, jeder mit anderem Aspekt der Sektion."`).join(',\n    ')}
   },
   "keyFacts": {
-    "industries": ["${deep ? '6-10' : '4-7'} Kernindustrien mit BIP-Anteil"],
-    "tradePartners": {"export":["${deep ? '6-10' : '4-7'} Hauptexportpartner mit Volumen/%"],"import":["${deep ? '6-10' : '4-7'} Hauptimportpartner"]},
-    "militaryActive": "aktive Soldaten + Reserve",
-    "militaryBudget": "USD + % vom BIP",
-    "nuclearWeapons": "ja|nein|wahrscheinlich (mit Sprengkopf-Zahl)",
-    "majorAllies": ["${deep ? '6-10' : '4-7'} Verbündete"],
-    "majorAdversaries": ["${deep ? '4-6' : '3-5'} Hauptgegner"],
-    "keyNumbers": [{"metric":"...","value":"...","year":"...","context":"...${deep ? '","source":"...' : ''}"}]
+    "industries": ["${deep ? '8-12' : '6-10'} Kernindustrien mit BIP-Anteil und Beschäftigung wenn möglich"],
+    "tradePartners": {"export":["${deep ? '8-12' : '6-10'} Hauptexportpartner mit Volumen/USD und %"],"import":["${deep ? '8-12' : '6-10'} Hauptimportpartner mit Volumen/USD und %"]},
+    "militaryActive": "aktive Soldaten + Reserve + Paramilitärs (Zahlen)",
+    "militaryBudget": "USD absolut + % vom BIP + Veränderung yoy",
+    "nuclearWeapons": "ja|nein|wahrscheinlich (mit Sprengkopf-Anzahl, Trägersystemen, Doktrin)",
+    "majorAllies": ["${deep ? '8-12' : '6-10'} Verbündete mit Allianz/Vertrag"],
+    "majorAdversaries": ["${deep ? '5-8' : '4-6'} Hauptgegner mit Konfliktart"],
+    "keyNumbers": [{"metric":"...","value":"...","year":"...","context":"1-2 Sätze Einordnung${deep ? '","source":"Web-Quelle' : ''}"}]
   },
-  "recentEvents": [{"date":"YYYY-MM","event":"konkret","impact":"..."${deep ? ',"source":"Web-Quelle"' : ''}}],
-  ${deep ? `"futureScenarios": [{"name":"...","probability":"high|medium|low","timeline":"...","description":"3-5 Sätze","drivers":["3-5"]}],
-  "monitoringIndicators": [{"indicator":"...","currentValue":"...","threshold":"..."}],` : ''}
+  "recentEvents": [{"date":"YYYY-MM","event":"konkret mit Zahlen","impact":"Auswirkung in 1-2 Sätzen"${deep ? ',"source":"Web-Quelle"' : ''}}],
+  "futureScenarios": [{"name":"Szenario-Name","probability":"high|medium|low","timeline":"kurzfristig 3-6M | mittelfristig 1-2J | langfristig 3-5J","description":"${deep ? '6-10' : '4-6'} Sätze: was passiert, welche Akteure, welche Konsequenzen","drivers":["${deep ? '5-8' : '4-6'} Treiber"]${deep ? ',"blockers":["3-5 Blocker"],"indicators":["5-8 Frühwarnindikatoren mit Schwellwerten"]' : ',"indicators":["3-5 Indikatoren"]'}}],
+  "monitoringIndicators": [{"indicator":"Was beobachten","currentValue":"aktueller Stand","threshold":"kritischer Schwellwert"${deep ? ',"frequency":"wie oft prüfen"' : ''}}],
   "confidence": "high|medium|low",
-  "sourceNote": "Wissensstand-Hinweis"
+  "sourceNote": "Wissensstand-Hinweis${deep ? ' + welche Web-Quellen konsultiert' : ''}"
 }
 
-Mindestens ${deep ? '12-18' : '6-10'} keyNumbers, ${deep ? '8-12' : '5-8'} recentEvents${deep ? ', 3-5 futureScenarios' : ''}.
-KEINE generischen Aussagen. IMMER konkret mit Zahlen.
-Auf Deutsch. Kompaktes JSON.`;
+WICHTIG:
+- ${wordsPerSection} pro Sektion - das ist Briefing-Tiefe, kein Tweet
+- Mindestens ${deep ? '18-25' : '12-18'} keyNumbers mit Jahr/Kontext
+- Mindestens ${deep ? '12-18' : '8-12'} recentEvents der letzten 24 Monate
+- Mindestens ${deep ? '5-8' : '3-5'} futureScenarios mit unterschiedlicher Wahrscheinlichkeit
+- Mindestens ${deep ? '6-10' : '4-6'} monitoringIndicators
+- KEINE generischen Aussagen wie "wichtig für die Region" - immer konkret mit Zahlen, Programmen, Beschluss-Nummern, Vertragsnamen
+- Mehrere Absätze pro Sektion mit unterschiedlichen Aspekten
+- Auf Deutsch antworten
+- Sauberes JSON ohne Markdown-Codeblock-Wrapper`;
 
   const userMsg = `Land: ${countryName} (${iso})
 
@@ -5762,43 +5795,78 @@ function formatAnalysisAsMarkdown(data) {
 // Bei deep=false: Sonnet 4.6, max_tokens 6000, ohne Web (schneller).
 async function runProjectAnalysisDirect({ thesis, baseCountries = [], recentEvents = [], deep = true }) {
   const eventsCtx = recentEvents.length
-    ? `\n\nLIVE-EREIGNISSE:\n${recentEvents.slice(0, 30).map(e => '- ' + e).join('\n')}`
+    ? `\n\nLIVE-EREIGNISSE:\n${recentEvents.slice(0, 40).map(e => '- ' + e).join('\n')}`
     : '';
 
-  const sys = `Du bist Senior-Geopolitik-Analyst${deep ? ' mit Web-Zugriff' : ''}. ${deep ? 'Recherchiere im Web aktuelle Zahlen, Daten, Programme (mindestens 5-8 unterschiedliche Suchen). ' : ''}Liefere AUSSCHLIESSLICH ein vollständiges JSON:
+  const sys = `Du bist Senior-Geopolitik-Analyst${deep ? ' mit Web-Zugriff' : ''}. ${deep ? 'Recherchiere im Web aktuelle Zahlen, Daten, Programme, Beschlüsse, Truppenstärken, Verträge (mindestens 8-12 unterschiedliche Suchen). ' : ''}Erstelle eine TIEFGEHENDE, AUSFÜHRLICHE Analyse - das ist ein vollständiges Senior-Briefing, kein Tweet. Liefere AUSSCHLIESSLICH ein vollständiges JSON:
 
 {
-  "summary": "${deep ? '5-8' : '3-5'} Sätze: Kontext + Spannungsfelder + aktueller Stand",
+  "summary": "${deep ? '10-15' : '7-10'} Sätze: Kontext, historische Einbettung, aktueller Stand, Kern-Spannungsfelder, strategische Position der Hauptakteure",
   "thesisStrength": "high|medium|low",
-  "thesisAssessment": "${deep ? '3-5' : '2-3'} Sätze: Begründung",
-  "countries": [{"iso":"DE","role":"primary|secondary|target|beneficiary|loser|bystander","intensity":"high|medium|low","reason":"${deep ? '3-4' : '2-3'} Sätze mit Zahlen","currentActivities":["${deep ? '5-8' : '3-5'} konkrete Aktivitäten mit Datum/Programm"],"capacities":"${deep ? '2-3' : '1-2'} Sätze mit Zahlen","stake":"konkret"${deep ? ',"sources":["max 3 Web-Quellen"]' : ''}}],
-  "actors": [{"name":"...","type":"alliance|state|ngo|company|individual|other","role":"${deep ? '2-3' : '1-2'} Sätze","stake":"konkret","capabilities":["${deep ? '5-8' : '3-4'} Fähigkeiten mit Zahlen"],"recentActions":["${deep ? '5-8' : '3-4'} jüngste Aktionen mit Datum"]${deep ? ',"sources":["max 3 Quellen"]' : ''}}],
-  "pastActivities": [{"date":"YYYY-MM","event":"konkret mit Zahlen","actor":"...","impact":"..."${deep ? ',"source":"Web-Quelle"' : ''}}],
-  "currentCapacities": {"military":"mit Zahlen","economic":"mit Zahlen","political":"...","infrastructure":"mit Zahlen"},
-  "keyNumbers": [{"metric":"...","value":"...","year":"...","context":"...${deep ? '","source":"...' : ''}"}],
-  "contextHints": ["${deep ? '12-18' : '8-12'} Kontext-Punkte mit Daten/Zahlen"],
-  "futureScenarios": [{"name":"...","probability":"high|medium|low","timeline":"...","description":"${deep ? '5-8' : '3-5'} Sätze","drivers":["${deep ? '5-8' : '3-4'} Treiber"],"blockers":["${deep ? '3-5' : '2-3'}"],"indicators":["${deep ? '5-8' : '3-4'} Indikatoren mit Schwellwerten"]}],
-  "monitoringIndicators": [{"indicator":"...","currentValue":"...","threshold":"...","frequency":"..."}],
-  "openQuestions": ["${deep ? '12-18' : '8-12'} präzise Fragen, je 1-2 Sätze"],
-  "criticalGaps": ["${deep ? '8-12' : '5-8'} Informationslücken"],
-  "actionableRecommendations": ["${deep ? '6-10' : '4-6'} konkrete Recherche-Schritte"]
+  "thesisAssessment": "${deep ? '5-8' : '4-6'} Sätze: ausführliche Begründung mit konkreten Belegen, welche Faktoren stützen/schwächen die These",
+  "countries": [{
+    "iso": "DE",
+    "role": "primary|secondary|target|beneficiary|loser|bystander",
+    "intensity": "high|medium|low",
+    "reason": "${deep ? '4-6' : '3-4'} Sätze: warum betroffen, mit konkreten Zahlen (BIP-Anteil, Truppen, Budgets, Handelsvolumen) und Programmen",
+    "currentActivities": ["${deep ? '8-12' : '5-8'} konkrete laufende Aktivitäten mit Datum/Programm/Budget"],
+    "capacities": "${deep ? '4-6' : '3-4'} Sätze: Militär/Wirtschaft/Politik mit konkreten Zahlen",
+    "stake": "${deep ? '2-3' : '1-2'} Sätze: was gewinnt/verliert das Land konkret"${deep ? ',\n    "sources": ["3-5 Web-Quellen-URLs oder -Titel"]' : ''}
+  }],
+  "actors": [{
+    "name": "NATO",
+    "type": "alliance|state|ngo|company|individual|other",
+    "role": "${deep ? '3-5' : '2-3'} Sätze",
+    "stake": "${deep ? '2-3' : '1-2'} Sätze konkret",
+    "capabilities": ["${deep ? '8-12' : '5-8'} Fähigkeiten mit Zahlen/Budgets/Personalstärke"],
+    "recentActions": ["${deep ? '8-12' : '5-8'} jüngste Aktionen mit Datum"]${deep ? ',\n    "sources": ["3-5 Quellen"]' : ''}
+  }],
+  "pastActivities": [{
+    "date": "YYYY-MM (genau)",
+    "event": "${deep ? '2-3 Sätze' : '1-2 Sätze'} konkret mit Zahlen",
+    "actor": "wer war beteiligt",
+    "impact": "${deep ? '2-3 Sätze' : '1-2 Sätze'} Auswirkung auf die These"${deep ? ',\n    "source": "Web-Quelle"' : ''}
+  }],
+  "currentCapacities": {
+    "military": "${deep ? '6-10 Sätze' : '4-6 Sätze'} mit Truppen, Budgets, Systemen, Programmen, Stationierungen",
+    "economic": "${deep ? '6-10 Sätze' : '4-6 Sätze'} mit BIP-Anteilen, Handelsvolumen, Investitionen, Sanktionen",
+    "political": "${deep ? '6-10 Sätze' : '4-6 Sätze'} mit Koalitionen, Beschlüssen, Allianzen, Wahlterminen",
+    "infrastructure": "${deep ? '5-8 Sätze' : '3-5 Sätze'} Pipelines, Häfen, Bahnen, Energie mit Kapazitäten"
+  },
+  "keyNumbers": [{"metric":"genaue Bezeichnung","value":"Wert mit Einheit","year":"YYYY","context":"${deep ? '2-3' : '1-2'} Sätze Einordnung"${deep ? ',\n    "source": "Web-Quelle"' : ''}}],
+  "contextHints": ["${deep ? '18-25' : '12-15'} ausführliche Kontext-Punkte mit Daten/Zahlen/Programmen/Beschlüssen (je 1-3 Sätze)"],
+  "futureScenarios": [{
+    "name": "Szenario-Name",
+    "probability": "high|medium|low",
+    "timeline": "kurzfristig 3-6M | mittelfristig 1-2J | langfristig 3-5J",
+    "description": "${deep ? '8-12' : '5-8'} Sätze: detailliertes Szenario - was passiert, welche Akteure, welche Konsequenzen, welche Schritte sind nötig",
+    "drivers": ["${deep ? '6-10' : '4-6'} Faktoren mit Erklärung"],
+    "blockers": ["${deep ? '4-6' : '3-4'} Faktoren mit Erklärung"],
+    "indicators": ["${deep ? '6-10' : '4-6'} beobachtbare Frühwarnindikatoren mit Schwellwerten"]
+  }],
+  "monitoringIndicators": [{"indicator":"was beobachten","currentValue":"aktueller Stand","threshold":"kritischer Schwellwert","frequency":"wie oft prüfen"}],
+  "openQuestions": ["${deep ? '15-20' : '10-12'} präzise zentrale Fragen, je ${deep ? '3-5' : '2-3'} Sätze, mit Indikator wie zu beantworten"],
+  "criticalGaps": ["${deep ? '10-15' : '6-10'} wichtige Informationslücken mit Erklärung warum kritisch"],
+  "actionableRecommendations": ["${deep ? '8-12' : '5-8'} konkrete Recherche-/Monitoring-Schritte mit Priorität (P1/P2/P3)"]
 }
 
 WICHTIG:
-- ISO 2-Buchstaben, Länder max ${deep ? '25' : '20'}, Akteure max ${deep ? '10' : '8'}.
-- pastActivities max ${deep ? '12' : '8'}, keyNumbers max ${deep ? '18' : '12'}, futureScenarios max ${deep ? '6' : '4'}.
-- NIE generische Aussagen, IMMER Zahlen/Programme/Beschlüsse.
+- ISO 2-Buchstaben, Länder max ${deep ? '30' : '22'}, Akteure max ${deep ? '12' : '10'}.
+- pastActivities min ${deep ? '15' : '10'} Einträge, keyNumbers min ${deep ? '25' : '18'}, futureScenarios min ${deep ? '6' : '4'}.
+- contextHints min ${deep ? '20' : '12'}, openQuestions min ${deep ? '15' : '10'}, monitoringIndicators min ${deep ? '8' : '5'}.
+- NIE generische Aussagen wie "wichtig für die Region" - IMMER konkret mit Zahlen, Programmnamen, Beschluss-Nummern, Vertragsnamen, Personen+Funktion+Datum.
 - Auf Deutsch antworten.
-- Kompaktes JSON ohne unnötige Whitespaces.`;
+- Sauberes JSON, kein Markdown-Codeblock-Wrapper.
+- AUSFÜHRLICH SCHREIBEN - das ist ein Senior-Briefing.`;
 
   const userMsg = `These: "${thesis}"
 ${baseCountries.length ? `Basis-Länder: ${baseCountries.join(', ')}` : ''}${eventsCtx}
 
-Liefere das vollständige JSON-Dossier. Sei ausführlich.`;
+Erstelle die vollständige, AUSFÜHRLICHE JSON-Analyse mit allen Sektionen in voller Tiefe.${deep ? ' Nutze Web-Suche aktiv (8-12 unterschiedliche Recherchen) für aktuelle Zahlen und Ereignisse.' : ''}`;
 
   const reqBody = {
     model: 'claude-sonnet-4-6',
-    max_tokens: deep ? 12000 : 6000,
+    max_tokens: deep ? 24000 : 16000,
     system: sys,
     messages: [{ role: 'user', content: userMsg }],
   };

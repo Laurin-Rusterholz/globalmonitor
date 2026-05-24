@@ -119,6 +119,16 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-siz
 .plane-icon,.ship-icon{font-size:14px;line-height:1;filter:drop-shadow(0 0 3px rgba(159,179,200,.6))}
 .ship-icon.military{color:var(--shipMil);filter:drop-shadow(0 0 4px rgba(255,93,162,.8))}
 .plane-icon.military{color:var(--planeMil);filter:drop-shadow(0 0 4px rgba(255,120,71,.8))}
+/* Layer-Symbol-Marker - statt blossen Punkten */
+.gm-layer-icon{background:none!important;border:none!important}
+.gm-layer-icon .gli{display:flex;align-items:center;justify-content:center;width:100%;height:100%;
+  border-radius:50%;font-size:13px;line-height:1;backdrop-filter:blur(2px);
+  background:rgba(15,20,29,.85);box-shadow:0 0 8px rgba(0,0,0,.5),inset 0 0 0 1.5px currentColor;
+  cursor:pointer;transition:transform .15s,box-shadow .15s}
+.gm-layer-icon .gli:hover{transform:scale(1.25);box-shadow:0 0 14px currentColor,inset 0 0 0 1.5px currentColor;z-index:1000}
+.gm-layer-icon .gli.gli-area{border-radius:50%;background:transparent;box-shadow:inset 0 0 0 2px currentColor;font-size:16px}
+.gm-layer-icon .gli.gli-pulse{animation:gli-pulse 1.8s ease-in-out infinite}
+@keyframes gli-pulse{0%,100%{box-shadow:0 0 8px rgba(0,0,0,.5),inset 0 0 0 1.5px currentColor}50%{box-shadow:0 0 16px currentColor,inset 0 0 0 1.5px currentColor}}
 
 /* ════ TOPBAR ════ */
 #topbar{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:1000;display:flex;gap:3px;
