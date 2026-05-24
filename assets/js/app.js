@@ -90,40 +90,123 @@ function parseModelJson(text, stopReason) {
   }
 }
 
+// Repariert ein durch max_tokens abgeschnittenes JSON.
+// Strategie:
+// 1. Scan: tracke String-State, Escape-State, Klammer-Depth
+// 2. Finde letzte "saubere" Position (nach komplettem Value: }, ], oder " als Wert)
+// 3. Trimme alles Unvollständige danach (offene Strings, halbe Keys, dangling Kommas/Doppelpunkte)
+// 4. Schliesse verbliebene offene Container
 function repairTruncatedJSON(s) {
-  let trimmed = s.trimEnd();
-  let depth = { brace: 0, bracket: 0 };
+  let str = s.trimEnd();
+  if (!str) return '{}';
+
+  // Schritt 1: alle Token-Positionen analysieren
   let inStr = false, esc = false;
-  let lastSafeIdx = -1;
+  let depth = 0; // Total-Tiefe (braces + brackets)
+  let lastSafeEnd = -1; // letzte Position nach kompletten Value/Element
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i];
+    if (esc) { esc = false; continue; }
+    if (inStr) {
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') {
+        inStr = false;
+        // String beendet - könnte Key oder Value sein. Sicher nur wenn als Value
+        // (folgt , } oder ]). Wir markieren provisorisch, validieren beim Schliessen.
+        // Hier: nur als safe markieren wenn wir innerhalb container sind UND der String
+        // tatsächlich ein Value ist (heuristisch: vorher kam : oder Container-Start)
+        // → einfacher: nicht hier markieren, sondern bei , } ]
+      }
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') {
+      depth--;
+      // Position NACH dem schliessenden Bracket ist sauber wenn depth >= 0
+      if (depth >= 0) lastSafeEnd = i;
+    } else if (c === ',') {
+      // Komma bedeutet vorheriger Value war komplett
+      if (depth >= 1) lastSafeEnd = i - 1; // Position vor dem Komma
+    }
+  }
+
+  // Schritt 2: trimmen auf lastSafeEnd, falls nötig
+  let trimmed;
+  if (lastSafeEnd >= 0 && lastSafeEnd < str.length - 1) {
+    trimmed = str.slice(0, lastSafeEnd + 1);
+  } else {
+    trimmed = str;
+  }
+
+  // Schritt 3: dangling Kommas/Doppelpunkte/halbe Keys entfernen
+  // Trailing , oder : oder " (offener Key) oder { oder [ → wegschneiden bis sauber
+  trimmed = trimmed.replace(/\s+$/, '');
+  while (trimmed.length > 1) {
+    const last = trimmed[trimmed.length - 1];
+    if (last === ',' || last === ':') {
+      trimmed = trimmed.slice(0, -1).replace(/\s+$/, '');
+      continue;
+    }
+    // Halber Key wie {"foo  oder [{"foo":1,"bar  → bis zum letzten , } ] zurück
+    if (last === '"') {
+      // Check ob String unvollständig endet (kein " als Pair davor im aktuellen Container)
+      // Einfacher: prüfe ob das Trimmen den String unbalanced lässt
+      let test = trimmed;
+      let inS = false, e = false;
+      for (let i = 0; i < test.length; i++) {
+        const c = test[i];
+        if (e) { e = false; continue; }
+        if (c === '\\') { e = true; continue; }
+        if (c === '"') inS = !inS;
+      }
+      if (inS) {
+        // Offener String - schneide das letzte " ab und alles danach
+        trimmed = trimmed.slice(0, -1);
+        // Suche nach letztem , oder { oder [ und schneide
+        let cutAt = -1;
+        let d = 0, iSt = false, es2 = false;
+        for (let i = 0; i < trimmed.length; i++) {
+          const c = trimmed[i];
+          if (es2) { es2 = false; continue; }
+          if (iSt) { if (c === '\\') es2 = true; if (c === '"') iSt = false; continue; }
+          if (c === '"') { iSt = true; continue; }
+          if (c === '{' || c === '[') d++;
+          else if (c === '}' || c === ']') d--;
+          else if (c === ',' && d >= 1) cutAt = i - 1;
+        }
+        if (cutAt >= 0) trimmed = trimmed.slice(0, cutAt + 1);
+        continue;
+      }
+      break; // String balanced, kein weiteres Trimmen
+    }
+    break;
+  }
+  trimmed = trimmed.replace(/[,\s]+$/, '');
+
+  // Schritt 4: offene Container zählen + schliessen
+  let oBrace = 0, oBracket = 0, ins = false, es = false;
   for (let i = 0; i < trimmed.length; i++) {
     const c = trimmed[i];
-    if (esc) { esc = false; continue; }
-    if (c === '\\') { esc = true; continue; }
-    if (c === '"') { inStr = !inStr; continue; }
-    if (inStr) continue;
-    if (c === '{') depth.brace++;
-    else if (c === '}') { depth.brace--; if (depth.brace >= 0 && depth.bracket === 0) lastSafeIdx = i; }
-    else if (c === '[') depth.bracket++;
-    else if (c === ']') { depth.bracket--; if (depth.brace === 0 && depth.bracket === 0) lastSafeIdx = i; }
-    else if (c === ',' && depth.brace === 1 && depth.bracket === 0) lastSafeIdx = i;
-  }
-  if (lastSafeIdx === -1) return trimmed;
-  let head = trimmed.slice(0, lastSafeIdx + 1).replace(/,\s*$/, '');
-  let oBrace = 0, oBracket = 0, ins = false, es = false;
-  for (let i = 0; i < head.length; i++) {
-    const c = head[i];
     if (es) { es = false; continue; }
-    if (c === '\\') { es = true; continue; }
-    if (c === '"') { ins = !ins; continue; }
-    if (ins) continue;
+    if (ins) {
+      if (c === '\\') { es = true; continue; }
+      if (c === '"') ins = false;
+      continue;
+    }
+    if (c === '"') { ins = true; continue; }
     if (c === '{') oBrace++;
     else if (c === '}') oBrace--;
     else if (c === '[') oBracket++;
     else if (c === ']') oBracket--;
   }
-  while (oBracket > 0) { head += ']'; oBracket--; }
-  while (oBrace > 0) { head += '}'; oBrace--; }
-  return head;
+  // Falls noch im String: nur sehr edge-case - String schliessen
+  if (ins) trimmed += '"';
+  // Schliessende Klammern in der RICHTIGEN Reihenfolge: erst ], dann } basierend auf
+  // tatsächlicher Schachtelung. Einfache Heuristik: alle gleichzeitig anhängen.
+  while (oBracket > 0) { trimmed += ']'; oBracket--; }
+  while (oBrace > 0) { trimmed += '}'; oBrace--; }
+  return trimmed;
 }
 
 window.USE_DIRECT_ANTHROPIC = USE_DIRECT_ANTHROPIC;
@@ -3239,10 +3322,11 @@ const DOSSIER_SECTION_LABELS = {
 };
 async function generateDossierDirect(iso, countryName, scope, context, deep) {
   const sections = DOSSIER_SECTIONS[scope] || DOSSIER_SECTIONS.full;
-  // Direct-Browser hat KEIN Netlify-Zeitlimit → Sonnet darf richtig schreiben.
-  // Deutlich grösszügigere Wortzahlen + max_tokens als vorher.
-  const wordsPerSection = deep ? '600-900 Wörter' : (scope === 'full' ? '400-600 Wörter' : '600-900 Wörter');
-  const maxTokens = deep ? 20000 : (scope === 'full' ? 14000 : 10000);
+  // Direct-Browser hat KEIN Netlify-Zeitlimit, aber Anthropic max_tokens-Cap.
+  // Bei 9 Sektionen mit 500+ Wörtern hat Sonnet sich am Cap abgeschnitten →
+  // realistische Budgets, die Sonnet zuverlässig komplettiert.
+  const wordsPerSection = deep ? '500-700 Wörter' : (scope === 'full' ? '280-400 Wörter' : '450-650 Wörter');
+  const maxTokens = deep ? 16000 : (scope === 'full' ? 10000 : 8000);
 
   const sys = `Du bist Senior-Geopolitik-Analyst${deep ? ' mit Web-Zugriff' : ''}. ${deep ? 'Recherchiere im Web aktuelle Zahlen/Programme/Beschlüsse (mind. 6-10 verschiedene Suchen). ' : ''}Erstelle eine TIEFGEHENDE Analyse - das ist ein Senior-Briefing, nicht ein Wikipedia-Stub. Liefere AUSSCHLIESSLICH ein vollständiges JSON:
 
@@ -3269,15 +3353,17 @@ async function generateDossierDirect(iso, countryName, scope, context, deep) {
 }
 
 WICHTIG:
-- ${wordsPerSection} pro Sektion - das ist Briefing-Tiefe, kein Tweet
-- Mindestens ${deep ? '18-25' : '12-18'} keyNumbers mit Jahr/Kontext
-- Mindestens ${deep ? '12-18' : '8-12'} recentEvents der letzten 24 Monate
-- Mindestens ${deep ? '5-8' : '3-5'} futureScenarios mit unterschiedlicher Wahrscheinlichkeit
-- Mindestens ${deep ? '6-10' : '4-6'} monitoringIndicators
-- KEINE generischen Aussagen wie "wichtig für die Region" - immer konkret mit Zahlen, Programmen, Beschluss-Nummern, Vertragsnamen
-- Mehrere Absätze pro Sektion mit unterschiedlichen Aspekten
+- ${wordsPerSection} pro Sektion - konkret aber NICHT überlang
+- Token-Budget: ${maxTokens} - das JSON MUSS innerhalb davon komplett sein
+- Lieber etwas KÜRZER schreiben pro Sektion als das JSON unvollständig abzubrechen
+- ${deep ? '12-18' : '8-12'} keyNumbers mit Jahr/Kontext
+- ${deep ? '8-12' : '5-8'} recentEvents der letzten 24 Monate
+- ${deep ? '4-6' : '3-4'} futureScenarios
+- ${deep ? '5-8' : '3-5'} monitoringIndicators
+- KEINE generischen Aussagen - immer konkret mit Zahlen, Programmen, Beschlüssen
 - Auf Deutsch antworten
-- Sauberes JSON ohne Markdown-Codeblock-Wrapper`;
+- Sauberes JSON ohne Markdown-Codeblock-Wrapper
+- ENDE mit gültiger schliessender Klammer }, JSON-Struktur muss VOLLSTÄNDIG sein`;
 
   const userMsg = `Land: ${countryName} (${iso})
 
@@ -3412,6 +3498,9 @@ function renderInlineDossier(target, d) {
   let html = '';
   if (d.deepDossier || d.webSearchUsed) {
     html += `<div style="background:linear-gradient(135deg,rgba(94,92,230,0.15),rgba(191,90,242,0.15));padding:8px 12px;border-radius:6px;margin-bottom:10px;font-size:11px;color:var(--ink-dim)">🔬 <b>Tiefendossier</b> · Modell: ${escapeHtml(d.model||'?')}${d.webSearchUsed ? ' · mit Web-Recherche' : ''}${d.webSources?.length ? ' · ' + d.webSources.length + ' Quellen' : ''}</div>`;
+  }
+  if (d.jsonRepaired) {
+    html += `<div style="background:rgba(255,159,10,0.15);border:1px solid rgba(255,159,10,0.4);padding:8px 12px;border-radius:6px;margin-bottom:10px;font-size:11px;color:#ff9f0a">⚠ KI-Antwort wurde am max_tokens-Limit abgeschnitten. JSON wurde geflickt - letzte Einträge eventuell unvollständig. Bei kritischen Daten Generierung wiederholen oder kleineren Scope wählen.</div>`;
   }
   if (d.summary) html += `<div class="doc-summary">${escapeHtml(d.summary)}</div>`;
   if (d.sections) {
@@ -5889,13 +5978,15 @@ async function runProjectAnalysisDirect({ thesis, baseCountries = [], recentEven
 }
 
 WICHTIG:
-- ISO 2-Buchstaben, Länder max ${deep ? '30' : '22'}, Akteure max ${deep ? '12' : '10'}.
-- pastActivities min ${deep ? '15' : '10'} Einträge, keyNumbers min ${deep ? '25' : '18'}, futureScenarios min ${deep ? '6' : '4'}.
-- contextHints min ${deep ? '20' : '12'}, openQuestions min ${deep ? '15' : '10'}, monitoringIndicators min ${deep ? '8' : '5'}.
-- NIE generische Aussagen wie "wichtig für die Region" - IMMER konkret mit Zahlen, Programmnamen, Beschluss-Nummern, Vertragsnamen, Personen+Funktion+Datum.
-- Auf Deutsch antworten.
-- Sauberes JSON, kein Markdown-Codeblock-Wrapper.
-- AUSFÜHRLICH SCHREIBEN - das ist ein Senior-Briefing.`;
+- Token-Budget ${deep ? 16000 : 10000} - JSON MUSS innerhalb davon vollständig sein
+- Lieber etwas kürzer pro Feld als JSON unvollständig abzubrechen
+- ISO 2-Buchstaben, Länder max ${deep ? '20' : '15'}, Akteure max ${deep ? '8' : '6'}
+- pastActivities ${deep ? '10-12' : '6-8'}, keyNumbers ${deep ? '15-18' : '10-12'}, futureScenarios ${deep ? '4-5' : '3'}
+- contextHints ${deep ? '12-15' : '8-10'}, openQuestions ${deep ? '10-12' : '7-9'}, monitoringIndicators ${deep ? '5-7' : '4-5'}
+- NIE generische Aussagen - IMMER konkret mit Zahlen, Programmen, Personen+Datum
+- Auf Deutsch antworten
+- Sauberes JSON ohne Markdown-Wrapper
+- JSON MUSS mit schliessender Klammer } enden`;
 
   const userMsg = `These: "${thesis}"
 ${baseCountries.length ? `Basis-Länder: ${baseCountries.join(', ')}` : ''}${eventsCtx}
@@ -5904,7 +5995,7 @@ Erstelle die vollständige, AUSFÜHRLICHE JSON-Analyse mit allen Sektionen in vo
 
   const reqBody = {
     model: 'claude-sonnet-4-6',
-    max_tokens: deep ? 24000 : 16000,
+    max_tokens: deep ? 16000 : 10000,
     system: sys,
     messages: [{ role: 'user', content: userMsg }],
   };
