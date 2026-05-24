@@ -91,122 +91,82 @@ function parseModelJson(text, stopReason) {
 }
 
 // Repariert ein durch max_tokens abgeschnittenes JSON.
-// Strategie:
-// 1. Scan: tracke String-State, Escape-State, Klammer-Depth
-// 2. Finde letzte "saubere" Position (nach komplettem Value: }, ], oder " als Wert)
-// 3. Trimme alles Unvollständige danach (offene Strings, halbe Keys, dangling Kommas/Doppelpunkte)
-// 4. Schliesse verbliebene offene Container
-function repairTruncatedJSON(s) {
-  let str = s.trimEnd();
-  if (!str) return '{}';
+// Strategie: sammle alle "sicheren" Cut-Positionen (nach komplettem Value am
+// Top-Level Container), probiere die spätesten zuerst. Schliesst Container
+// in LIFO-Order über einen Stack (vorheriger Bug: schloss ] vor } bei {[{}).
+function repairTruncatedJSON(input) {
+  let s = String(input || '').trimEnd();
+  if (!s) return '{}';
+  // Pre-Text vor erstem { abschneiden
+  const startIdx = s.indexOf('{');
+  if (startIdx > 0) s = s.slice(startIdx);
+  if (!s.startsWith('{')) return '{}';
 
-  // Schritt 1: alle Token-Positionen analysieren
+  // Scan: finde alle Positionen wo ein Top-Level-Value gerade komplett wurde
+  let stack = [];
   let inStr = false, esc = false;
-  let depth = 0; // Total-Tiefe (braces + brackets)
-  let lastSafeEnd = -1; // letzte Position nach kompletten Value/Element
-  for (let i = 0; i < str.length; i++) {
-    const c = str[i];
+  const safePositions = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
     if (esc) { esc = false; continue; }
     if (inStr) {
       if (c === '\\') { esc = true; continue; }
-      if (c === '"') {
-        inStr = false;
-        // String beendet - könnte Key oder Value sein. Sicher nur wenn als Value
-        // (folgt , } oder ]). Wir markieren provisorisch, validieren beim Schliessen.
-        // Hier: nur als safe markieren wenn wir innerhalb container sind UND der String
-        // tatsächlich ein Value ist (heuristisch: vorher kam : oder Container-Start)
-        // → einfacher: nicht hier markieren, sondern bei , } ]
-      }
+      if (c === '"') inStr = false;
       continue;
     }
     if (c === '"') { inStr = true; continue; }
-    if (c === '{' || c === '[') depth++;
+    if (c === '{') stack.push('}');
+    else if (c === '[') stack.push(']');
     else if (c === '}' || c === ']') {
-      depth--;
-      // Position NACH dem schliessenden Bracket ist sauber wenn depth >= 0
-      if (depth >= 0) lastSafeEnd = i;
-    } else if (c === ',') {
-      // Komma bedeutet vorheriger Value war komplett
-      if (depth >= 1) lastSafeEnd = i - 1; // Position vor dem Komma
+      stack.pop();
+      // Nach Schliessen: wenn noch Container offen → safe Position (komplettes Sub-Value)
+      if (stack.length >= 1) safePositions.push(i);
+    } else if (c === ',' && stack.length >= 1) {
+      // Komma im Container = vorheriger Value/Element ist komplett
+      safePositions.push(i - 1);
     }
   }
 
-  // Schritt 2: trimmen auf lastSafeEnd, falls nötig
-  let trimmed;
-  if (lastSafeEnd >= 0 && lastSafeEnd < str.length - 1) {
-    trimmed = str.slice(0, lastSafeEnd + 1);
-  } else {
-    trimmed = str;
+  // Versuche späteste safe Position zuerst
+  for (let idx = safePositions.length - 1; idx >= 0; idx--) {
+    const pos = safePositions[idx];
+    const candidate = s.slice(0, pos + 1);
+    const closed = _closeJsonStructures(candidate);
+    try { JSON.parse(closed); return closed; }
+    catch { /* nächste Position */ }
   }
+  // Fallback: leerer Top-Level-Container
+  try { JSON.parse(_closeJsonStructures(s)); return _closeJsonStructures(s); }
+  catch { return '{}'; }
+}
 
-  // Schritt 3: dangling Kommas/Doppelpunkte/halbe Keys entfernen
-  // Trailing , oder : oder " (offener Key) oder { oder [ → wegschneiden bis sauber
-  trimmed = trimmed.replace(/\s+$/, '');
-  while (trimmed.length > 1) {
-    const last = trimmed[trimmed.length - 1];
-    if (last === ',' || last === ':') {
-      trimmed = trimmed.slice(0, -1).replace(/\s+$/, '');
+// Schliesst offene { und [ in LIFO-Reihenfolge via Stack.
+// Entfernt vorher trailing , : und Whitespace.
+function _closeJsonStructures(s) {
+  let stack = [];
+  let inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (esc) { esc = false; continue; }
+    if (inStr) {
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') inStr = false;
       continue;
     }
-    // Halber Key wie {"foo  oder [{"foo":1,"bar  → bis zum letzten , } ] zurück
-    if (last === '"') {
-      // Check ob String unvollständig endet (kein " als Pair davor im aktuellen Container)
-      // Einfacher: prüfe ob das Trimmen den String unbalanced lässt
-      let test = trimmed;
-      let inS = false, e = false;
-      for (let i = 0; i < test.length; i++) {
-        const c = test[i];
-        if (e) { e = false; continue; }
-        if (c === '\\') { e = true; continue; }
-        if (c === '"') inS = !inS;
-      }
-      if (inS) {
-        // Offener String - schneide das letzte " ab und alles danach
-        trimmed = trimmed.slice(0, -1);
-        // Suche nach letztem , oder { oder [ und schneide
-        let cutAt = -1;
-        let d = 0, iSt = false, es2 = false;
-        for (let i = 0; i < trimmed.length; i++) {
-          const c = trimmed[i];
-          if (es2) { es2 = false; continue; }
-          if (iSt) { if (c === '\\') es2 = true; if (c === '"') iSt = false; continue; }
-          if (c === '"') { iSt = true; continue; }
-          if (c === '{' || c === '[') d++;
-          else if (c === '}' || c === ']') d--;
-          else if (c === ',' && d >= 1) cutAt = i - 1;
-        }
-        if (cutAt >= 0) trimmed = trimmed.slice(0, cutAt + 1);
-        continue;
-      }
-      break; // String balanced, kein weiteres Trimmen
-    }
-    break;
+    if (c === '"') { inStr = true; continue; }
+    if (c === '{') stack.push('}');
+    else if (c === '[') stack.push(']');
+    else if (c === '}' || c === ']') stack.pop();
   }
-  trimmed = trimmed.replace(/[,\s]+$/, '');
-
-  // Schritt 4: offene Container zählen + schliessen
-  let oBrace = 0, oBracket = 0, ins = false, es = false;
-  for (let i = 0; i < trimmed.length; i++) {
-    const c = trimmed[i];
-    if (es) { es = false; continue; }
-    if (ins) {
-      if (c === '\\') { es = true; continue; }
-      if (c === '"') ins = false;
-      continue;
-    }
-    if (c === '"') { ins = true; continue; }
-    if (c === '{') oBrace++;
-    else if (c === '}') oBrace--;
-    else if (c === '[') oBracket++;
-    else if (c === ']') oBracket--;
+  let result = s.replace(/[,\s:]+$/, '');
+  // Falls noch im String (sollte bei sauberer Cut-Position nicht passieren)
+  if (inStr) {
+    if (result.endsWith('\\')) result = result.slice(0, -1);
+    result += '"';
   }
-  // Falls noch im String: nur sehr edge-case - String schliessen
-  if (ins) trimmed += '"';
-  // Schliessende Klammern in der RICHTIGEN Reihenfolge: erst ], dann } basierend auf
-  // tatsächlicher Schachtelung. Einfache Heuristik: alle gleichzeitig anhängen.
-  while (oBracket > 0) { trimmed += ']'; oBracket--; }
-  while (oBrace > 0) { trimmed += '}'; oBrace--; }
-  return trimmed;
+  // LIFO schliessen - das war der frühere Bug
+  while (stack.length) result += stack.pop();
+  return result;
 }
 
 window.USE_DIRECT_ANTHROPIC = USE_DIRECT_ANTHROPIC;
@@ -3322,46 +3282,43 @@ const DOSSIER_SECTION_LABELS = {
 };
 async function generateDossierDirect(iso, countryName, scope, context, deep) {
   const sections = DOSSIER_SECTIONS[scope] || DOSSIER_SECTIONS.full;
-  // Direct-Browser hat KEIN Netlify-Zeitlimit, aber Anthropic max_tokens-Cap.
-  // Bei 9 Sektionen mit 500+ Wörtern hat Sonnet sich am Cap abgeschnitten →
-  // realistische Budgets, die Sonnet zuverlässig komplettiert.
-  const wordsPerSection = deep ? '500-700 Wörter' : (scope === 'full' ? '280-400 Wörter' : '450-650 Wörter');
-  const maxTokens = deep ? 16000 : (scope === 'full' ? 10000 : 8000);
+  // Direct-Browser hat KEIN Netlify-Zeitlimit, aber Sonnet braucht Zeit pro Token.
+  // Realistisch: ~40 Token/s → 8000 Tokens ≈ 3-4 Min. User will schnell + ausführlich.
+  // Sync: kompakter aber konkret, ~30-60s. Deep: ausführlich + Web, ~2-5 Min.
+  const wordsPerSection = deep ? '350-500 Wörter' : (scope === 'full' ? '180-260 Wörter' : '320-450 Wörter');
+  const maxTokens = deep ? 10000 : (scope === 'full' ? 6000 : 5000);
 
-  const sys = `Du bist Senior-Geopolitik-Analyst${deep ? ' mit Web-Zugriff' : ''}. ${deep ? 'Recherchiere im Web aktuelle Zahlen/Programme/Beschlüsse (mind. 6-10 verschiedene Suchen). ' : ''}Erstelle eine TIEFGEHENDE Analyse - das ist ein Senior-Briefing, nicht ein Wikipedia-Stub. Liefere AUSSCHLIESSLICH ein vollständiges JSON:
+  const sys = `Du bist Senior-Geopolitik-Analyst${deep ? ' mit Web-Zugriff' : ''}. ${deep ? 'Recherchiere im Web (5-8 Suchen). ' : ''}Liefere AUSSCHLIESSLICH ein KOMPAKTES, vollständiges JSON. Konkret mit Zahlen, aber Token-Budget begrenzt.
 
 {
-  "summary": "${deep ? '8-12' : '6-9'} Sätze: ausführliche Charakterisierung, historische Einbettung, aktuelle Spannungsfelder, strategische Position",
+  "summary": "${deep ? '5-8' : '4-6'} Sätze Charakterisierung mit Spannungsfeldern",
   "sections": {
-    ${sections.map(k => `"${k}": "Markdown mit **Fettung** und mehreren Absätzen. ${wordsPerSection}. Sehr konkret mit Zahlen (BIP, Truppen, Budgets, %, Volumen, Stückzahlen), Namen (Personen mit Titel+Funktion, Organisationen, Programme, Verträge mit Nummern), Daten (Beschluss-Nummern, Wahlen, Vertragsdaten, Truppenstationierungen). Mindestens 3-5 Absätze, jeder mit anderem Aspekt der Sektion."`).join(',\n    ')}
+    ${sections.map(k => `"${k}": "Markdown mit **Fettung**. ${wordsPerSection}. Konkret mit Zahlen (BIP, Truppen, Budget, %), Namen (Personen+Funktion, Programme), Daten (Beschlüsse, Wahlen)."`).join(',\n    ')}
   },
   "keyFacts": {
-    "industries": ["${deep ? '8-12' : '6-10'} Kernindustrien mit BIP-Anteil und Beschäftigung wenn möglich"],
-    "tradePartners": {"export":["${deep ? '8-12' : '6-10'} Hauptexportpartner mit Volumen/USD und %"],"import":["${deep ? '8-12' : '6-10'} Hauptimportpartner mit Volumen/USD und %"]},
-    "militaryActive": "aktive Soldaten + Reserve + Paramilitärs (Zahlen)",
-    "militaryBudget": "USD absolut + % vom BIP + Veränderung yoy",
-    "nuclearWeapons": "ja|nein|wahrscheinlich (mit Sprengkopf-Anzahl, Trägersystemen, Doktrin)",
-    "majorAllies": ["${deep ? '8-12' : '6-10'} Verbündete mit Allianz/Vertrag"],
-    "majorAdversaries": ["${deep ? '5-8' : '4-6'} Hauptgegner mit Konfliktart"],
-    "keyNumbers": [{"metric":"...","value":"...","year":"...","context":"1-2 Sätze Einordnung${deep ? '","source":"Web-Quelle' : ''}"}]
+    "industries": ["${deep ? '6-8' : '4-6'} Kernindustrien"],
+    "tradePartners": {"export":["${deep ? '5-7' : '4-5'} Hauptexportpartner"],"import":["${deep ? '5-7' : '4-5'} Hauptimportpartner"]},
+    "militaryActive": "aktive Soldaten + Reserve",
+    "militaryBudget": "USD + % vom BIP",
+    "nuclearWeapons": "ja|nein|wahrscheinlich (mit Sprengkopf-Zahl)",
+    "majorAllies": ["${deep ? '6-8' : '4-6'} Verbündete"],
+    "majorAdversaries": ["${deep ? '4-5' : '3-4'} Hauptgegner"],
+    "keyNumbers": [{"metric":"...","value":"...","year":"YYYY","context":"1 Satz"${deep ? ',"source":"..."' : ''}}]
   },
-  "recentEvents": [{"date":"YYYY-MM","event":"konkret mit Zahlen","impact":"Auswirkung in 1-2 Sätzen"${deep ? ',"source":"Web-Quelle"' : ''}}],
-  "futureScenarios": [{"name":"Szenario-Name","probability":"high|medium|low","timeline":"kurzfristig 3-6M | mittelfristig 1-2J | langfristig 3-5J","description":"${deep ? '6-10' : '4-6'} Sätze: was passiert, welche Akteure, welche Konsequenzen","drivers":["${deep ? '5-8' : '4-6'} Treiber"]${deep ? ',"blockers":["3-5 Blocker"],"indicators":["5-8 Frühwarnindikatoren mit Schwellwerten"]' : ',"indicators":["3-5 Indikatoren"]'}}],
-  "monitoringIndicators": [{"indicator":"Was beobachten","currentValue":"aktueller Stand","threshold":"kritischer Schwellwert"${deep ? ',"frequency":"wie oft prüfen"' : ''}}],
+  "recentEvents": [{"date":"YYYY-MM","event":"1-2 Sätze","impact":"1 Satz"${deep ? ',"source":"..."' : ''}}],
+  "futureScenarios": [{"name":"...","probability":"high|medium|low","timeline":"kurz 3-6M | mittel 1-2J | lang 3-5J","description":"${deep ? '3-5' : '2-3'} Sätze","drivers":["${deep ? '3-4' : '2-3'} Treiber"]${deep ? ',"indicators":["3-4 Indikatoren"]' : ''}}],
+  "monitoringIndicators": [{"indicator":"...","currentValue":"...","threshold":"..."}],
   "confidence": "high|medium|low",
-  "sourceNote": "Wissensstand-Hinweis${deep ? ' + welche Web-Quellen konsultiert' : ''}"
+  "sourceNote": "Wissensstand-Hinweis"
 }
 
 WICHTIG:
 - ${wordsPerSection} pro Sektion - konkret aber NICHT überlang
-- Token-Budget: ${maxTokens} - das JSON MUSS innerhalb davon komplett sein
-- Lieber etwas KÜRZER schreiben pro Sektion als das JSON unvollständig abzubrechen
-- ${deep ? '12-18' : '8-12'} keyNumbers mit Jahr/Kontext
-- ${deep ? '8-12' : '5-8'} recentEvents der letzten 24 Monate
-- ${deep ? '4-6' : '3-4'} futureScenarios
-- ${deep ? '5-8' : '3-5'} monitoringIndicators
-- KEINE generischen Aussagen - immer konkret mit Zahlen, Programmen, Beschlüssen
-- Auf Deutsch antworten
+- Token-Budget ${maxTokens} - JSON MUSS vollständig sein, ENDE mit }
+- ${deep ? '8-10' : '6-8'} keyNumbers, ${deep ? '6-8' : '4-6'} recentEvents
+- ${deep ? '3-4' : '2-3'} futureScenarios, ${deep ? '4-5' : '3'} monitoringIndicators
+- NIE generische Aussagen, immer konkret mit Zahlen/Programmen
+- Auf Deutsch
 - Sauberes JSON ohne Markdown-Codeblock-Wrapper
 - ENDE mit gültiger schliessender Klammer }, JSON-Struktur muss VOLLSTÄNDIG sein`;
 
@@ -5925,68 +5882,61 @@ async function runProjectAnalysisDirect({ thesis, baseCountries = [], recentEven
     ? `\n\nLIVE-EREIGNISSE:\n${recentEvents.slice(0, 40).map(e => '- ' + e).join('\n')}`
     : '';
 
-  const sys = `Du bist Senior-Geopolitik-Analyst${deep ? ' mit Web-Zugriff' : ''}. ${deep ? 'Recherchiere im Web aktuelle Zahlen, Daten, Programme, Beschlüsse, Truppenstärken, Verträge (mindestens 8-12 unterschiedliche Suchen). ' : ''}Erstelle eine TIEFGEHENDE, AUSFÜHRLICHE Analyse - das ist ein vollständiges Senior-Briefing, kein Tweet. Liefere AUSSCHLIESSLICH ein vollständiges JSON:
+  const sys = `Du bist Senior-Geopolitik-Analyst${deep ? ' mit Web-Zugriff' : ''}. ${deep ? 'Recherchiere im Web (5-8 unterschiedliche Suchen). ' : ''}Liefere AUSSCHLIESSLICH ein vollständiges JSON. Sei KONKRET aber KOMPAKT - Token-Budget begrenzt.
 
 {
-  "summary": "${deep ? '10-15' : '7-10'} Sätze: Kontext, historische Einbettung, aktueller Stand, Kern-Spannungsfelder, strategische Position der Hauptakteure",
+  "summary": "${deep ? '6-9' : '4-6'} Sätze: Kontext, Spannungsfelder, aktueller Stand",
   "thesisStrength": "high|medium|low",
-  "thesisAssessment": "${deep ? '5-8' : '4-6'} Sätze: ausführliche Begründung mit konkreten Belegen, welche Faktoren stützen/schwächen die These",
+  "thesisAssessment": "${deep ? '3-4' : '2-3'} Sätze Begründung",
   "countries": [{
     "iso": "DE",
     "role": "primary|secondary|target|beneficiary|loser|bystander",
     "intensity": "high|medium|low",
-    "reason": "${deep ? '4-6' : '3-4'} Sätze: warum betroffen, mit konkreten Zahlen (BIP-Anteil, Truppen, Budgets, Handelsvolumen) und Programmen",
-    "currentActivities": ["${deep ? '8-12' : '5-8'} konkrete laufende Aktivitäten mit Datum/Programm/Budget"],
-    "capacities": "${deep ? '4-6' : '3-4'} Sätze: Militär/Wirtschaft/Politik mit konkreten Zahlen",
-    "stake": "${deep ? '2-3' : '1-2'} Sätze: was gewinnt/verliert das Land konkret"${deep ? ',\n    "sources": ["3-5 Web-Quellen-URLs oder -Titel"]' : ''}
+    "reason": "${deep ? '2-3' : '1-2'} Sätze mit Zahlen",
+    "currentActivities": ["${deep ? '4-5' : '2-3'} konkrete Aktivitäten mit Datum/Programm"],
+    "capacities": "${deep ? '2-3' : '1-2'} Sätze konkret mit Zahlen",
+    "stake": "1 Satz konkret"${deep ? ',\n    "sources": ["max 2 Web-Quellen"]' : ''}
   }],
   "actors": [{
-    "name": "NATO",
+    "name": "...",
     "type": "alliance|state|ngo|company|individual|other",
-    "role": "${deep ? '3-5' : '2-3'} Sätze",
-    "stake": "${deep ? '2-3' : '1-2'} Sätze konkret",
-    "capabilities": ["${deep ? '8-12' : '5-8'} Fähigkeiten mit Zahlen/Budgets/Personalstärke"],
-    "recentActions": ["${deep ? '8-12' : '5-8'} jüngste Aktionen mit Datum"]${deep ? ',\n    "sources": ["3-5 Quellen"]' : ''}
+    "role": "${deep ? '2' : '1'} Satz",
+    "stake": "1 Satz",
+    "capabilities": ["${deep ? '4-5' : '2-3'} Fähigkeiten mit Zahlen"],
+    "recentActions": ["${deep ? '4-5' : '2-3'} jüngste Aktionen mit Datum"]
   }],
-  "pastActivities": [{
-    "date": "YYYY-MM (genau)",
-    "event": "${deep ? '2-3 Sätze' : '1-2 Sätze'} konkret mit Zahlen",
-    "actor": "wer war beteiligt",
-    "impact": "${deep ? '2-3 Sätze' : '1-2 Sätze'} Auswirkung auf die These"${deep ? ',\n    "source": "Web-Quelle"' : ''}
-  }],
+  "pastActivities": [{"date":"YYYY-MM","event":"${deep ? '1-2 Sätze' : '1 Satz'} konkret","actor":"...","impact":"1 Satz"${deep ? ',\n    "source":"Web-Quelle"' : ''}}],
   "currentCapacities": {
-    "military": "${deep ? '6-10 Sätze' : '4-6 Sätze'} mit Truppen, Budgets, Systemen, Programmen, Stationierungen",
-    "economic": "${deep ? '6-10 Sätze' : '4-6 Sätze'} mit BIP-Anteilen, Handelsvolumen, Investitionen, Sanktionen",
-    "political": "${deep ? '6-10 Sätze' : '4-6 Sätze'} mit Koalitionen, Beschlüssen, Allianzen, Wahlterminen",
-    "infrastructure": "${deep ? '5-8 Sätze' : '3-5 Sätze'} Pipelines, Häfen, Bahnen, Energie mit Kapazitäten"
+    "military": "${deep ? '4-5 Sätze' : '2-3 Sätze'} mit Truppen/Budget/Systemen",
+    "economic": "${deep ? '4-5 Sätze' : '2-3 Sätze'} mit BIP/Handel/Investitionen",
+    "political": "${deep ? '4-5 Sätze' : '2-3 Sätze'} Koalitionen/Beschlüsse",
+    "infrastructure": "${deep ? '3-4 Sätze' : '1-2 Sätze'} mit Kapazitäten"
   },
-  "keyNumbers": [{"metric":"genaue Bezeichnung","value":"Wert mit Einheit","year":"YYYY","context":"${deep ? '2-3' : '1-2'} Sätze Einordnung"${deep ? ',\n    "source": "Web-Quelle"' : ''}}],
-  "contextHints": ["${deep ? '18-25' : '12-15'} ausführliche Kontext-Punkte mit Daten/Zahlen/Programmen/Beschlüssen (je 1-3 Sätze)"],
+  "keyNumbers": [{"metric":"...","value":"...","year":"YYYY","context":"1 Satz"${deep ? ',\n    "source":"..."' : ''}}],
+  "contextHints": ["${deep ? '8-10' : '5-6'} Kontext-Punkte mit Zahlen/Daten (je 1-2 Sätze)"],
   "futureScenarios": [{
-    "name": "Szenario-Name",
+    "name": "...",
     "probability": "high|medium|low",
     "timeline": "kurzfristig 3-6M | mittelfristig 1-2J | langfristig 3-5J",
-    "description": "${deep ? '8-12' : '5-8'} Sätze: detailliertes Szenario - was passiert, welche Akteure, welche Konsequenzen, welche Schritte sind nötig",
-    "drivers": ["${deep ? '6-10' : '4-6'} Faktoren mit Erklärung"],
-    "blockers": ["${deep ? '4-6' : '3-4'} Faktoren mit Erklärung"],
-    "indicators": ["${deep ? '6-10' : '4-6'} beobachtbare Frühwarnindikatoren mit Schwellwerten"]
+    "description": "${deep ? '4-6' : '2-4'} Sätze",
+    "drivers": ["${deep ? '4-5' : '2-3'} Treiber"]${deep ? ',\n    "blockers":["3-4 Blocker"],\n    "indicators":["4-5 Indikatoren"]' : ',\n    "indicators":["2-3 Indikatoren"]'}
   }],
-  "monitoringIndicators": [{"indicator":"was beobachten","currentValue":"aktueller Stand","threshold":"kritischer Schwellwert","frequency":"wie oft prüfen"}],
-  "openQuestions": ["${deep ? '15-20' : '10-12'} präzise zentrale Fragen, je ${deep ? '3-5' : '2-3'} Sätze, mit Indikator wie zu beantworten"],
-  "criticalGaps": ["${deep ? '10-15' : '6-10'} wichtige Informationslücken mit Erklärung warum kritisch"],
-  "actionableRecommendations": ["${deep ? '8-12' : '5-8'} konkrete Recherche-/Monitoring-Schritte mit Priorität (P1/P2/P3)"]
+  "monitoringIndicators": [{"indicator":"...","currentValue":"...","threshold":"..."}],
+  "openQuestions": ["${deep ? '8-10' : '5-6'} präzise Fragen, je 1-2 Sätze"],
+  "criticalGaps": ["${deep ? '5-6' : '3-4'} Wissenslücken"],
+  "actionableRecommendations": ["${deep ? '5-6' : '3-4'} konkrete Schritte mit Priorität"]
 }
 
 WICHTIG:
-- Token-Budget ${deep ? 16000 : 10000} - JSON MUSS innerhalb davon vollständig sein
-- Lieber etwas kürzer pro Feld als JSON unvollständig abzubrechen
-- ISO 2-Buchstaben, Länder max ${deep ? '20' : '15'}, Akteure max ${deep ? '8' : '6'}
-- pastActivities ${deep ? '10-12' : '6-8'}, keyNumbers ${deep ? '15-18' : '10-12'}, futureScenarios ${deep ? '4-5' : '3'}
-- contextHints ${deep ? '12-15' : '8-10'}, openQuestions ${deep ? '10-12' : '7-9'}, monitoringIndicators ${deep ? '5-7' : '4-5'}
+- Token-Budget ${deep ? 10000 : 6000} - JSON MUSS innerhalb davon vollständig sein
+- Lieber kürzer pro Feld als JSON abzubrechen, ENDE mit schliessender Klammer
+- ISO 2-Buchstaben, Länder max ${deep ? '15' : '10'}, Akteure max ${deep ? '8' : '6'}
+- pastActivities max ${deep ? '8' : '5'}, keyNumbers max ${deep ? '12' : '8'}, futureScenarios max ${deep ? '4' : '3'}
+- contextHints max ${deep ? '10' : '6'}, openQuestions max ${deep ? '10' : '6'}, monitoringIndicators max ${deep ? '5' : '3'}
+- criticalGaps max ${deep ? '6' : '4'}, actionableRecommendations max ${deep ? '6' : '4'}
 - NIE generische Aussagen - IMMER konkret mit Zahlen, Programmen, Personen+Datum
-- Auf Deutsch antworten
-- Sauberes JSON ohne Markdown-Wrapper
-- JSON MUSS mit schliessender Klammer } enden`;
+- Auf Deutsch
+- Kompaktes JSON ohne Markdown-Wrapper`;
 
   const userMsg = `These: "${thesis}"
 ${baseCountries.length ? `Basis-Länder: ${baseCountries.join(', ')}` : ''}${eventsCtx}
@@ -5995,7 +5945,7 @@ Erstelle die vollständige, AUSFÜHRLICHE JSON-Analyse mit allen Sektionen in vo
 
   const reqBody = {
     model: 'claude-sonnet-4-6',
-    max_tokens: deep ? 16000 : 10000,
+    max_tokens: deep ? 10000 : 6000,
     system: sys,
     messages: [{ role: 'user', content: userMsg }],
   };
